@@ -1,0 +1,20 @@
+{
+  "name": "airguard-web-server",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "node src/server.js",
+    "test": "node --test test/",
+    "user:add": "node src/cli.js user:add",
+    "user:list": "node src/cli.js user:list",
+    "user:revoke": "node src/cli.js user:revoke",
+    "device:add": "node src/cli.js device:add"
+  },
+  "dependencies": {
+    "express": "^4.21.1"
+  }
+}

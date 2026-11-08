@@ -1,0 +1,99 @@
+# AirGuard Web: contatos de emergência
+
+Aplicativo web para celular onde cada usuário cadastra **nome e telefone** das pessoas que devem
+ser avisadas pelo AirGuard IoT. O **notebook hospeda** a página e a API na rede local, e o
+**ESP32 lê pelo Wi-Fi** a lista de todos os números.
+
+- `server/`: Node 20 + Express. API, controle de acesso e dados em `data/db.json`.
+- `web/`: React + Vite + TypeScript. Interface de celular com visual futurista, instalável na tela
+  inicial (PWA).
+
+Endereço na rede local: **http://192.168.1.10:8787**. O IP do notebook foi fixado na rede Wi-Fi
+`MinhaRede`.
+
+## Acesso: um código por usuário
+
+- Cada usuário recebe um **link pessoal** no formato `http://192.168.1.10:8787/#k=<código>`.
+- O código tem **256 bits aleatórios** (32 bytes do gerador criptográfico do sistema, 43
+  caracteres). Não dá para adivinhar nem testar por força bruta.
+- O servidor guarda **só o hash SHA-256** do código. Uma cópia de `data/db.json` não revela nenhum
+  código válido. O link é mostrado **uma única vez**, quando o usuário é criado.
+- O código fica **depois do `#`**: o navegador não o envia na linha da requisição, então ele não
+  aparece em logs nem no cabeçalho Referer. O app o guarda no aparelho (para abrir pelo ícone da
+  tela inicial) e o tira da barra de endereço.
+- Tentativas erradas são limitadas a 10 por minuto por IP (resposta 429).
+- **Cada usuário vê e altera só os próprios contatos.**
+
+## Administração (no notebook)
+
+```bash
+export PATH="$HOME/.nvm/versions/node/v20.17.0/bin:$PATH"
+cd server
+npm run user:add -- "Maria"       # cria o usuário e mostra o link (uma vez só)
+npm run user:list                 # usuários (sem códigos)
+npm run user:revoke -- <id>       # desativa o link de alguém
+npm run device:add -- "ESP32"     # chave do ESP32 (cabeçalho X-Device-Key)
+```
+
+O servidor em execução percebe essas mudanças sozinho, sem precisar reiniciar.
+
+## Rodar
+
+```bash
+export PATH="$HOME/.nvm/versions/node/v20.17.0/bin:$PATH"
+(cd web && npm install && npm run build)     # gera web/dist
+(cd server && npm install && npm start)      # http://0.0.0.0:8787
+```
+
+Testes do servidor (9, com `node:test`): `cd server && npm test`.
+Desenvolvimento da interface: `cd web && npm run dev` (porta 5174, com proxy para a API em 8787).
+
+### Iniciar sozinho com o notebook (opcional)
+
+Serviço de usuário do systemd. Ele sobe quando você faz login:
+
+```bash
+mkdir -p ~/.config/systemd/user
+cat > ~/.config/systemd/user/airguard-web.service <<EOF
+[Unit]
+Description=AirGuard Web on :8787
+After=network-online.target
+
+[Service]
+ExecStart="$HOME/.nvm/versions/node/v20.17.0/bin/node" "$PWD/server/src/server.js"
+Restart=on-failure
+
+[Install]
+WantedBy=default.target
+EOF
+systemctl --user daemon-reload && systemctl --user enable --now airguard-web
+```
+
+Rode o bloco acima **dentro da pasta `AirGuard-Web`**. Para desativar:
+`systemctl --user disable --now airguard-web`.
+
+## API
+
+| Método | Rota | Autenticação | Resposta |
+|---|---|---|---|
+| GET | `/api/me` | `Authorization: Bearer <código>` | `{ name }` |
+| GET | `/api/contacts` | idem | contatos **do usuário** |
+| POST | `/api/contacts` `{name, phone}` | idem | 201 / 400 `invalid_name`, `invalid_phone` / 409 `duplicate_phone`, `limit_reached` |
+| DELETE | `/api/contacts/:id` | idem | 204 / 404 |
+| GET | `/api/device/contacts` | `X-Device-Key: <chave>` | `{ contacts: [{ name, phone }] }`: números de **todos** os usuários, sem repetição |
+
+- Telefones são guardados em **E.164** (`+5511988887777`), o formato do WhatsApp.
+- Números brasileiros são aceitos em qualquer forma comum: `(11) 98888-7777`, `11988887777`,
+  `+55 11 98888 7777`, `011 98888-7777`. Números de outros países precisam começar com `+`.
+- Limites: nome com 1–40 caracteres, 100 contatos por usuário, corpo da requisição até 4 KB.
+
+## Limitações
+
+- **HTTP sem TLS:** na rede local, o código trafega sem criptografia de aplicação. A proteção vem
+  da senha WPA2 do Wi-Fi. Quem estiver na mesma rede e capturar o tráfego pode ver um código.
+  Para acesso fora de casa, coloque o servidor atrás de HTTPS (proxy reverso ou túnel) antes de
+  expor a porta.
+- O código fica salvo no celular (localStorage). Quem tiver o aparelho desbloqueado consegue abrir
+  o app. Para cortar o acesso, use `user:revoke`.
+- Dados num arquivo JSON: suficiente para dezenas de usuários. Para mais do que isso, trocar por
+  SQLite.
