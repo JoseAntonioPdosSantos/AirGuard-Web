@@ -24,20 +24,36 @@ Endereço na rede local: **http://192.168.1.10:8787**. O IP do notebook foi fixa
 - Tentativas erradas são limitadas a 10 por minuto por IP (resposta 429).
 - **Cada usuário vê e altera só os próprios contatos.**
 
-## Administração (no notebook)
+## Administração
+
+Os comandos estão na seção do Docker abaixo. Sem Docker, use `cd server && npm run user:add -- "Maria"`
+(e também `user:list`, `user:revoke`, `device:add`). O link aparece **uma única vez**, e o servidor
+em execução percebe as mudanças sozinho, sem reiniciar.
+
+## Rodar com Docker (inicia sozinho com o notebook)
+
+O container usa `restart: unless-stopped`, e o serviço do Docker já inicia com o sistema. Assim,
+depois de um reboot o AirGuard Web **volta sozinho**, sem precisar de login.
 
 ```bash
-export PATH="$HOME/.nvm/versions/node/v20.17.0/bin:$PATH"
-cd server
-npm run user:add -- "Maria"       # cria o usuário e mostra o link (uma vez só)
-npm run user:list                 # usuários (sem códigos)
-npm run user:revoke -- <id>       # desativa o link de alguém
-npm run device:add -- "ESP32"     # chave do ESP32 (cabeçalho X-Device-Key)
+cd AirGuard-Web
+docker compose up -d --build        # compila o app e inicia (repita após mudar o código)
+docker compose logs -f              # log do servidor
+docker compose stop                 # para (não volta no reboot até um "start"/"up")
 ```
 
-O servidor em execução percebe essas mudanças sozinho, sem precisar reiniciar.
+Os dados ficam em `./data/db.json` (volume), fora da imagem: recriar o container não apaga nada.
 
-## Rodar
+Administração, com o container rodando:
+
+```bash
+docker compose exec airguard-web node server/src/cli.js user:add "Maria"
+docker compose exec airguard-web node server/src/cli.js user:list
+docker compose exec airguard-web node server/src/cli.js user:revoke <id>
+docker compose exec airguard-web node server/src/cli.js device:add "ESP32"
+```
+
+### Sem Docker (desenvolvimento)
 
 ```bash
 export PATH="$HOME/.nvm/versions/node/v20.17.0/bin:$PATH"
@@ -46,31 +62,8 @@ export PATH="$HOME/.nvm/versions/node/v20.17.0/bin:$PATH"
 ```
 
 Testes do servidor (9, com `node:test`): `cd server && npm test`.
-Desenvolvimento da interface: `cd web && npm run dev` (porta 5174, com proxy para a API em 8787).
-
-### Iniciar sozinho com o notebook (opcional)
-
-Serviço de usuário do systemd. Ele sobe quando você faz login:
-
-```bash
-mkdir -p ~/.config/systemd/user
-cat > ~/.config/systemd/user/airguard-web.service <<EOF
-[Unit]
-Description=AirGuard Web on :8787
-After=network-online.target
-
-[Service]
-ExecStart="$HOME/.nvm/versions/node/v20.17.0/bin/node" "$PWD/server/src/server.js"
-Restart=on-failure
-
-[Install]
-WantedBy=default.target
-EOF
-systemctl --user daemon-reload && systemctl --user enable --now airguard-web
-```
-
-Rode o bloco acima **dentro da pasta `AirGuard-Web`**. Para desativar:
-`systemctl --user disable --now airguard-web`.
+Interface com recarga automática: `cd web && npm run dev` (porta 5174, com proxy para a API em 8787).
+Não rode o modo sem Docker e o container ao mesmo tempo: os dois usam a porta 8787.
 
 ## API
 
