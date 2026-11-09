@@ -71,6 +71,7 @@ test('API: add, list and delete contacts; lists are per user', async () => {
   const c = await r.json();
   assert.equal(c.phone, '+5511988887777');
   assert.equal(c.phoneDisplay, '+55 (11) 98888-7777');
+  assert.equal(c.category, 'outro');                             // default when omitted
   r = await api('/api/contacts', tokA, { method: 'POST', body: JSON.stringify({ name: 'Mãe 2', phone: '11988887777' }) });
   assert.equal(r.status, 409);                                   // same number twice
   r = await api('/api/contacts', tokA, { method: 'POST', body: JSON.stringify({ name: '', phone: '11988887777' }) });
@@ -83,6 +84,19 @@ test('API: add, list and delete contacts; lists are per user', async () => {
   assert.equal((await api(`/api/contacts/${c.id}`, tokB, { method: 'DELETE' })).status, 404);  // cannot delete others'
   assert.equal((await api(`/api/contacts/${c.id}`, tokA, { method: 'DELETE' })).status, 204);
   assert.equal((await (await api('/api/contacts', tokA)).json()).length, 0);
+});
+
+test('API: contact categories are validated and returned', async () => {
+  let r = await api('/api/contacts', tokA, { method: 'POST', body: JSON.stringify({ name: 'Drogaria', phone: '1133334444', category: 'farmacia' }) });
+  assert.equal(r.status, 201);
+  const c = await r.json();
+  assert.equal(c.category, 'farmacia');
+  r = await api('/api/contacts', tokA, { method: 'POST', body: JSON.stringify({ name: 'X', phone: '1133335555', category: 'nave' }) });
+  assert.equal(r.status, 400);
+  assert.deepEqual(await r.json(), { error: 'invalid_category' });
+  r = await api('/api/contacts', tokA, { method: 'POST', body: JSON.stringify({ name: 'X', phone: '1133335555', category: 7 }) });
+  assert.equal(r.status, 400);
+  assert.equal((await api(`/api/contacts/${c.id}`, tokA, { method: 'DELETE' })).status, 204);
 });
 
 test('API: data file never contains an access code', async () => {
@@ -101,6 +115,7 @@ test('device API: key required, returns every user\'s numbers once', async () =>
   assert.equal(r.status, 200);
   const { contacts } = await r.json();
   assert.deepEqual(contacts.map((c) => c.phone).sort(), ['+5521988887777', '+5521999990000']);
+  assert.ok(contacts.every((c) => c.category === 'outro'));
 });
 
 test('API: CLI changes are seen without restart; revoked users lose access', async () => {

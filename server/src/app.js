@@ -2,16 +2,17 @@
 //
 // User API (Authorization: Bearer <user access code>):
 //   GET    /api/me                 -> { name }
-//   GET    /api/contacts           -> [{ id, name, phone, phoneDisplay, createdAt }]
-//   POST   /api/contacts {name, phone}
+//   GET    /api/contacts           -> [{ id, name, phone, phoneDisplay, category, createdAt }]
+//   POST   /api/contacts {name, phone, category?}
 //   DELETE /api/contacts/:id
 // Device API for the ESP32 (X-Device-Key: <device key>):
-//   GET    /api/device/contacts    -> { contacts: [{ name, phone }] }  (every user's list)
+//   GET    /api/device/contacts    -> { contacts: [{ name, phone, category }] }  (every user's list)
 import express from 'express';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { hashToken, looksLikeToken, sameHash } from './tokens.js';
 import { normalizePhone, formatPhone, cleanName } from './phone.js';
+import { cleanCategory, DEFAULT_CATEGORY } from './categories.js';
 
 export const MAX_CONTACTS_PER_USER = 100;
 
@@ -74,7 +75,8 @@ export function createApp(store, { staticDir, limiter = new FailLimiter(), log =
     next();
   };
 
-  const view = (c) => ({ id: c.id, name: c.name, phone: c.phone, phoneDisplay: formatPhone(c.phone), createdAt: c.createdAt });
+  const view = (c) => ({ id: c.id, name: c.name, phone: c.phone, phoneDisplay: formatPhone(c.phone),
+    category: c.category || DEFAULT_CATEGORY, createdAt: c.createdAt });
 
   app.get('/api/me', authUser, (req, res) => res.json({ name: req.user.name }));
 
@@ -86,12 +88,14 @@ export function createApp(store, { staticDir, limiter = new FailLimiter(), log =
   app.post('/api/contacts', authUser, (req, res) => {
     const name = cleanName(req.body?.name);
     const phone = normalizePhone(req.body?.phone);
+    const category = cleanCategory(req.body?.category);
     if (!name) return res.status(400).json({ error: 'invalid_name' });
     if (!phone) return res.status(400).json({ error: 'invalid_phone' });
+    if (!category) return res.status(400).json({ error: 'invalid_category' });
     const mine = store.contactsOf(req.user.id);
     if (mine.length >= MAX_CONTACTS_PER_USER) return res.status(409).json({ error: 'limit_reached' });
     if (mine.some((c) => c.phone === phone)) return res.status(409).json({ error: 'duplicate_phone' });
-    const c = store.addContact(req.user.id, name, phone);
+    const c = store.addContact(req.user.id, name, phone, category);
     log(`contact added by ${req.user.name}`);
     res.status(201).json(view(c));
   });
@@ -112,7 +116,7 @@ export function createApp(store, { staticDir, limiter = new FailLimiter(), log =
     for (const c of store.allContacts()) {
       if (seen.has(c.phone)) continue;
       seen.add(c.phone);
-      contacts.push({ name: c.name, phone: c.phone });
+      contacts.push({ name: c.name, phone: c.phone, category: c.category || DEFAULT_CATEGORY });
     }
     res.json({ contacts });
   });
@@ -120,8 +124,11 @@ export function createApp(store, { staticDir, limiter = new FailLimiter(), log =
   app.use('/api', (req, res) => res.status(404).json({ error: 'not_found' }));
 
   if (staticDir && existsSync(staticDir)) {
-    app.use(express.static(staticDir, { index: 'index.html', maxAge: '1h' }));
-    app.get('*', (req, res) => res.sendFile(join(staticDir, 'index.html')));
+    // index.html always revalidates so a new build reaches phones at once;
+    // hashed assets (/assets/*) can be cached.
+    const noCacheHtml = (res, path) => { if (path.endsWith('.html') || path.endsWith('.webmanifest')) res.set('Cache-Control', 'no-cache'); };
+    app.use(express.static(staticDir, { index: 'index.html', maxAge: '1h', setHeaders: noCacheHtml }));
+    app.get('*', (req, res) => res.set('Cache-Control', 'no-cache').sendFile(join(staticDir, 'index.html')));
   }
   return app;
 }

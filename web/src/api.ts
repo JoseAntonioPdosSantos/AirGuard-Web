@@ -27,6 +27,7 @@ export interface Contact {
   name: string;
   phone: string;
   phoneDisplay: string;
+  category: string;
   createdAt: string;
 }
 
@@ -49,8 +50,8 @@ async function call<T>(code: string, path: string, init: RequestInit = {}): Prom
 export const api = {
   me: (c: string) => call<{ name: string }>(c, '/api/me'),
   list: (c: string) => call<Contact[]>(c, '/api/contacts'),
-  add: (c: string, name: string, phone: string) =>
-    call<Contact>(c, '/api/contacts', { method: 'POST', body: JSON.stringify({ name, phone }) }),
+  add: (c: string, name: string, phone: string, category: string) =>
+    call<Contact>(c, '/api/contacts', { method: 'POST', body: JSON.stringify({ name, phone, category }) }),
   remove: (c: string, id: string) => call<void>(c, `/api/contacts/${encodeURIComponent(id)}`, { method: 'DELETE' }),
 };
 
@@ -59,6 +60,7 @@ export function errorText(e: unknown): string {
   switch (code) {
     case 'invalid_name': return 'Informe um nome (até 40 caracteres).';
     case 'invalid_phone': return 'Número inválido. Use DDD + número, ex.: (11) 98888-7777.';
+    case 'invalid_category': return 'Categoria inválida.';
     case 'duplicate_phone': return 'Esse número já está cadastrado.';
     case 'limit_reached': return 'Limite de 100 contatos atingido.';
     case 'too_many_attempts': return 'Muitas tentativas. Aguarde um minuto.';

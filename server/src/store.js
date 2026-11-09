@@ -67,9 +67,9 @@ export class Store {
     this.refresh();
     return this.data.contacts.filter((c) => c.ownerId === userId);
   }
-  addContact(userId, name, phone) {
+  addContact(userId, name, phone, category = 'outro') {
     this.refresh();
-    const c = { id: randomUUID(), ownerId: userId, name, phone, createdAt: new Date().toISOString() };
+    const c = { id: randomUUID(), ownerId: userId, name, phone, category, createdAt: new Date().toISOString() };
     this.data.contacts.push(c);
     this.save();
     return c;

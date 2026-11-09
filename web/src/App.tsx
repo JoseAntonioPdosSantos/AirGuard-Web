@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react';
 import { api, errorText, forgetCode, takeCodeFromUrl, ApiError, type Contact } from './api';
+import { CATEGORIES, CategoryIcon, categoryOf, type CategoryId } from './categories';
 
 type Phase = 'loading' | 'denied' | 'ready';
 
@@ -20,6 +21,7 @@ export default function App() {
   const [user, setUser] = useState('');
   const [contacts, setContacts] = useState<Contact[]>([]);
   const [query, setQuery] = useState('');
+  const [filter, setFilter] = useState<CategoryId | null>(null);
   const [sheet, setSheet] = useState(false);
   const [toast, setToast] = useState<{ text: string; kind: 'ok' | 'err' } | null>(null);
   const [confirmId, setConfirmId] = useState<string | null>(null);
@@ -44,12 +46,26 @@ export default function App() {
 
   useEffect(() => { void load(); }, [load]);
 
+  // categories that have at least one contact, in the fixed order, with counts
+  const used = useMemo(() => {
+    const n = new Map<string, number>();
+    for (const c of contacts) n.set(categoryOf(c.category).id, (n.get(categoryOf(c.category).id) || 0) + 1);
+    return CATEGORIES.filter((k) => n.has(k.id)).map((k) => ({ ...k, count: n.get(k.id)! }));
+  }, [contacts]);
+
   const shown = useMemo(() => {
     const q = query.trim().toLowerCase();
-    if (!q) return contacts;
     const qd = q.replace(/\D/g, '');
-    return contacts.filter((c) => c.name.toLowerCase().includes(q) || (qd && c.phone.includes(qd)));
-  }, [contacts, query]);
+    return contacts.filter((c) => {
+      const cat = categoryOf(c.category);
+      if (filter && cat.id !== filter) return false;
+      if (!q) return true;
+      return c.name.toLowerCase().includes(q) || cat.label.toLowerCase().includes(q) || (qd && c.phone.includes(qd));
+    });
+  }, [contacts, query, filter]);
+
+  // drop a filter whose last contact was removed
+  useEffect(() => { if (filter && !used.some((k) => k.id === filter)) setFilter(null); }, [filter, used]);
 
   async function remove(id: string) {
     if (!code) return;
@@ -71,7 +87,7 @@ export default function App() {
           <img src="/icon.svg" alt="" className="logo" />
           <div>
             <h1>AIRGUARD</h1>
-            <p className="sub">CONTATOS DE EMERGÊNCIA</p>
+            <p className="sub">CONTATOS ÚTEIS</p>
           </div>
         </div>
         <div className="user" title="Usuário conectado">
@@ -86,8 +102,8 @@ export default function App() {
           <span className="lbl">contatos</span>
         </div>
         <div className="stat">
-          <span className="num">{phase === 'loading' ? '··' : 'ON'}</span>
-          <span className="lbl">sincronizado</span>
+          <span className="num">{String(used.length).padStart(2, '0')}</span>
+          <span className="lbl">categorias</span>
         </div>
         <div className="stat">
           <span className="num">100</span>
@@ -98,12 +114,24 @@ export default function App() {
       <div className="search">
         <svg viewBox="0 0 24 24" aria-hidden><circle cx="11" cy="11" r="7" /><path d="m20 20-3.5-3.5" /></svg>
         <input
-          placeholder="Buscar nome ou número"
+          placeholder="Buscar nome, serviço ou número"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           aria-label="Buscar contatos"
         />
       </div>
+
+      {used.length > 1 && (
+        <nav className="filters" aria-label="Filtrar por categoria">
+          <button className={`fchip ${filter === null ? 'on' : ''}`} onClick={() => setFilter(null)}>Todos</button>
+          {used.map((k) => (
+            <button key={k.id} className={`fchip ${filter === k.id ? 'on' : ''}`} style={{ ['--c' as string]: k.color }}
+              onClick={() => setFilter(filter === k.id ? null : k.id)} aria-pressed={filter === k.id}>
+              <CategoryIcon id={k.id} />{k.label}<span className="fcount">{k.count}</span>
+            </button>
+          ))}
+        </nav>
+      )}
 
       <main className="list">
         {phase === 'loading' && <div className="skeleton" />}
@@ -111,14 +139,19 @@ export default function App() {
           <div className="empty">
             <div className="ring" />
             <p>{contacts.length ? 'Nenhum contato encontrado.' : 'Nenhum contato ainda.'}</p>
-            {!contacts.length && <p className="hint">Toque em <b>+</b> para cadastrar quem deve ser avisado.</p>}
+            {!contacts.length && <p className="hint">Toque em <b>+</b> para guardar farmácia, gás, médico, marido de aluguel e outros números úteis.</p>}
           </div>
         )}
-        {shown.map((c, i) => (
-          <article key={c.id} className="card" style={{ animationDelay: `${i * 40}ms` }}>
-            <div className="avatar">{initials(c.name)}</div>
+        {shown.map((c, i) => {
+          const cat = categoryOf(c.category);
+          return (
+          <article key={c.id} className="card" style={{ animationDelay: `${i * 40}ms`, ['--c' as string]: cat.color }}>
+            <div className={`avatar ${cat.id === 'outro' ? '' : 'svc'}`} title={cat.label}>
+              {cat.id === 'outro' ? initials(c.name) : <CategoryIcon id={cat.id} />}
+            </div>
             <div className="info">
               <h2>{c.name}</h2>
+              <p className="meta"><span className="tag">{cat.label}</span></p>
               <p className="phone">{c.phoneDisplay}</p>
             </div>
             {confirmId === c.id ? (
@@ -140,7 +173,8 @@ export default function App() {
               </div>
             )}
           </article>
-        ))}
+          );
+        })}
       </main>
 
       <button className="fab" onClick={() => setSheet(true)} aria-label="Cadastrar contato">
@@ -167,6 +201,7 @@ export default function App() {
 function AddSheet({ code, onClose, onAdded }: { code: string; onClose: () => void; onAdded: (c: Contact) => void }) {
   const [name, setName] = useState('');
   const [phone, setPhone] = useState('');
+  const [category, setCategory] = useState<CategoryId>('farmacia');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
 
@@ -174,7 +209,7 @@ function AddSheet({ code, onClose, onAdded }: { code: string; onClose: () => voi
     e.preventDefault();
     setError('');
     setBusy(true);
-    try { onAdded(await api.add(code, name, phone)); }
+    try { onAdded(await api.add(code, name, phone, category)); }
     catch (err) { setError(errorText(err)); }
     finally { setBusy(false); }
   }
@@ -184,9 +219,23 @@ function AddSheet({ code, onClose, onAdded }: { code: string; onClose: () => voi
       <form className="sheet" onSubmit={submit} onClick={(e) => e.stopPropagation()}>
         <div className="grab" />
         <h3>NOVO CONTATO</h3>
+        <fieldset className="cats">
+          <legend>Serviço</legend>
+          <div className="cat-grid" role="radiogroup">
+            {CATEGORIES.map((k) => (
+              <button type="button" key={k.id} role="radio" aria-checked={category === k.id}
+                className={`cat ${category === k.id ? 'on' : ''}`} style={{ ['--c' as string]: k.color }}
+                onClick={() => setCategory(k.id)}>
+                <CategoryIcon id={k.id} />
+                <span>{k.label}</span>
+              </button>
+            ))}
+          </div>
+        </fieldset>
         <label>
-          <span>Nome / contato</span>
-          <input value={name} onChange={(e) => setName(e.target.value)} maxLength={40} autoComplete="name" required autoFocus placeholder="Ex.: Maria (vizinha)" />
+          <span>Nome</span>
+          <input value={name} onChange={(e) => setName(e.target.value)} maxLength={40} required
+            placeholder={`Ex.: ${category === 'outro' ? 'Maria (vizinha)' : categoryOf(category).label + ' do bairro'}`} />
         </label>
         <label>
           <span>Telefone</span>

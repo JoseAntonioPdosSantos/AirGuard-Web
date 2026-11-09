@@ -1,7 +1,8 @@
-# AirGuard Web: contatos de emergência
+# AirGuard Web: contatos úteis
 
-Aplicativo web para celular onde cada usuário cadastra **nome e telefone** das pessoas que devem
-ser avisadas pelo AirGuard IoT. O **notebook hospeda** a página e a API na rede local, e o
+Aplicativo web para celular onde cada usuário guarda os **contatos úteis da cozinha/casa**
+(farmácia, médico, gás, água, mercado, delivery, marido de aluguel, eletricista, encanador,
+chaveiro, assistência de eletrodomésticos e outros), cada um com o **ícone do serviço**. O **notebook hospeda** a página e a API na rede local, e o
 **ESP32 lê pelo Wi-Fi** a lista de todos os números.
 
 - `server/`: Node 20 + Express. API, controle de acesso e dados em `data/db.json`.
@@ -61,7 +62,7 @@ export PATH="$HOME/.nvm/versions/node/v20.17.0/bin:$PATH"
 (cd server && npm install && npm start)      # http://0.0.0.0:8787
 ```
 
-Testes do servidor (9, com `node:test`): `cd server && npm test`.
+Testes do servidor (10, com `node:test`): `cd server && npm test`.
 Interface com recarga automática: `cd web && npm run dev` (porta 5174, com proxy para a API em 8787).
 Não rode o modo sem Docker e o container ao mesmo tempo: os dois usam a porta 8787.
 
@@ -70,11 +71,15 @@ Não rode o modo sem Docker e o container ao mesmo tempo: os dois usam a porta 8
 | Método | Rota | Autenticação | Resposta |
 |---|---|---|---|
 | GET | `/api/me` | `Authorization: Bearer <código>` | `{ name }` |
-| GET | `/api/contacts` | idem | contatos **do usuário** |
-| POST | `/api/contacts` `{name, phone}` | idem | 201 / 400 `invalid_name`, `invalid_phone` / 409 `duplicate_phone`, `limit_reached` |
+| GET | `/api/contacts` | idem | contatos **do usuário** (com `category`) |
+| POST | `/api/contacts` `{name, phone, category?}` | idem | 201 / 400 `invalid_name`, `invalid_phone`, `invalid_category` / 409 `duplicate_phone`, `limit_reached` |
 | DELETE | `/api/contacts/:id` | idem | 204 / 404 |
-| GET | `/api/device/contacts` | `X-Device-Key: <chave>` | `{ contacts: [{ name, phone }] }`: números de **todos** os usuários, sem repetição |
+| GET | `/api/device/contacts` | `X-Device-Key: <chave>` | `{ contacts: [{ name, phone, category }] }`: números de **todos** os usuários, sem repetição |
 
+- Categorias (`category`): `farmacia`, `medico`, `gas`, `agua`, `mercado`, `delivery`, `marido`,
+  `eletricista`, `encanador`, `chaveiro`, `eletro`, `outro`. Sem categoria vira `outro` (contatos
+  antigos também). A lista está em `server/src/categories.js` e, com rótulos e ícones, em
+  `web/src/categories.tsx`: as duas precisam ter os mesmos ids.
 - Telefones são guardados em **E.164** (`+5511988887777`), o formato do WhatsApp.
 - Números brasileiros são aceitos em qualquer forma comum: `(11) 98888-7777`, `11988887777`,
   `+55 11 98888 7777`, `011 98888-7777`. Números de outros países precisam começar com `+`.
