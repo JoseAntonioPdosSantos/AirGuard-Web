@@ -25,6 +25,19 @@ Endereço na rede local: **http://192.168.1.10:8787**. O IP do notebook foi fixa
 - Tentativas erradas são limitadas a 10 por minuto por IP (resposta 429).
 - **Cada usuário vê e altera só os próprios contatos.**
 
+## Senha de edição
+
+- Cadastrar, **editar** e excluir contatos pede a **senha de edição** do usuário. Ver a lista,
+  ligar e abrir o WhatsApp não pedem senha.
+- Na primeira vez que o usuário tenta cadastrar, editar ou excluir, o app pede que ele **crie** a
+  senha (de 4 a 64 caracteres). Depois disso, ela é pedida uma vez a cada vez que a página é aberta e
+  fica **só na memória** do navegador, nunca em `localStorage`.
+- Para trocar a senha, toque no seu nome no canto superior direito. A troca exige a senha atual.
+- O servidor guarda só o **hash scrypt** da senha, com salt aleatório. Senhas erradas contam no
+  mesmo limite de 10 tentativas por minuto por IP.
+- Senha esquecida: `user:password-reset <id>` apaga a senha, e o usuário cria uma nova no app.
+- Para editar um contato, toque no nome ou no telefone dele.
+
 ## Administração
 
 Os comandos estão na seção do Docker abaixo. Sem Docker, use `cd server && npm run user:add -- "Maria"`
@@ -51,6 +64,7 @@ Administração, com o container rodando:
 docker compose exec airguard-web node server/src/cli.js user:add "Maria"
 docker compose exec airguard-web node server/src/cli.js user:list
 docker compose exec airguard-web node server/src/cli.js user:revoke <id>
+docker compose exec airguard-web node server/src/cli.js user:password-reset <id>
 docker compose exec airguard-web node server/src/cli.js device:add "ESP32"
 ```
 
@@ -62,7 +76,7 @@ export PATH="$HOME/.nvm/versions/node/v20.17.0/bin:$PATH"
 (cd server && npm install && npm start)      # http://0.0.0.0:8787
 ```
 
-Testes do servidor (10, com `node:test`): `cd server && npm test`.
+Testes do servidor (14, com `node:test`): `cd server && npm test`.
 Interface com recarga automática: `cd web && npm run dev` (porta 5174, com proxy para a API em 8787).
 Não rode o modo sem Docker e o container ao mesmo tempo: os dois usam a porta 8787.
 
@@ -70,10 +84,13 @@ Não rode o modo sem Docker e o container ao mesmo tempo: os dois usam a porta 8
 
 | Método | Rota | Autenticação | Resposta |
 |---|---|---|---|
-| GET | `/api/me` | `Authorization: Bearer <código>` | `{ name }` |
-| GET | `/api/contacts` | idem | contatos **do usuário** (com `category`) |
-| POST | `/api/contacts` `{name, phone, category?}` | idem | 201 / 400 `invalid_name`, `invalid_phone`, `invalid_category` / 409 `duplicate_phone`, `limit_reached` |
-| DELETE | `/api/contacts/:id` | idem | 204 / 404 |
+| GET | `/api/me` | `Authorization: Bearer <código>` | `{ name, hasPassword }` |
+| POST | `/api/password` `{password, current?}` | idem | 204 / 400 `invalid_password` / 403 `wrong_password` (troca sem a senha atual correta) |
+| POST | `/api/password/check` | idem + `X-Edit-Password` | 204 / 403 `wrong_password` / 428 `password_not_set` |
+| GET | `/api/contacts` | código | contatos **do usuário** (com `category`) |
+| POST | `/api/contacts` `{name, phone, category?}` | código + `X-Edit-Password` | 201 / 400 `invalid_name`, `invalid_phone`, `invalid_category` / 409 `duplicate_phone`, `limit_reached` / 403 / 428 |
+| PUT | `/api/contacts/:id` `{name, phone, category?}` | código + `X-Edit-Password` | 200 / 400 / 404 / 409 `duplicate_phone` / 403 / 428 |
+| DELETE | `/api/contacts/:id` | código + `X-Edit-Password` | 204 / 404 / 403 / 428 |
 | GET | `/api/device/contacts` | `X-Device-Key: <chave>` | `{ contacts: [{ name, phone, category }] }`: números de **todos** os usuários, sem repetição |
 
 - Categorias (`category`): `farmacia`, `medico`, `gas`, `agua`, `mercado`, `delivery`, `marido`,

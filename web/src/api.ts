@@ -35,10 +35,15 @@ export class ApiError extends Error {
   constructor(public status: number, public code: string) { super(code); }
 }
 
-async function call<T>(code: string, path: string, init: RequestInit = {}): Promise<T> {
+async function call<T>(code: string, path: string, init: RequestInit = {}, password?: string): Promise<T> {
   const r = await fetch(path, {
     ...init,
-    headers: { 'content-type': 'application/json', authorization: `Bearer ${code}`, ...(init.headers || {}) },
+    headers: {
+      'content-type': 'application/json',
+      authorization: `Bearer ${code}`,
+      ...(password !== undefined ? { 'x-edit-password': password } : {}),
+      ...(init.headers || {}),
+    },
   });
   if (r.status === 204) return undefined as T;
   let body: unknown = null;
@@ -47,12 +52,22 @@ async function call<T>(code: string, path: string, init: RequestInit = {}): Prom
   return body as T;
 }
 
+export interface ContactInput { name: string; phone: string; category: string }
+
+// Adding, editing and deleting need the user's edit password (header X-Edit-Password).
+// It is kept only in memory: asked again after the page is reloaded.
 export const api = {
-  me: (c: string) => call<{ name: string }>(c, '/api/me'),
+  me: (c: string) => call<{ name: string; hasPassword: boolean }>(c, '/api/me'),
   list: (c: string) => call<Contact[]>(c, '/api/contacts'),
-  add: (c: string, name: string, phone: string, category: string) =>
-    call<Contact>(c, '/api/contacts', { method: 'POST', body: JSON.stringify({ name, phone, category }) }),
-  remove: (c: string, id: string) => call<void>(c, `/api/contacts/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+  add: (c: string, pw: string, v: ContactInput) =>
+    call<Contact>(c, '/api/contacts', { method: 'POST', body: JSON.stringify(v) }, pw),
+  update: (c: string, pw: string, id: string, v: ContactInput) =>
+    call<Contact>(c, `/api/contacts/${encodeURIComponent(id)}`, { method: 'PUT', body: JSON.stringify(v) }, pw),
+  remove: (c: string, pw: string, id: string) =>
+    call<void>(c, `/api/contacts/${encodeURIComponent(id)}`, { method: 'DELETE' }, pw),
+  checkPassword: (c: string, pw: string) => call<void>(c, '/api/password/check', { method: 'POST' }, pw),
+  setPassword: (c: string, password: string, current?: string) =>
+    call<void>(c, '/api/password', { method: 'POST', body: JSON.stringify({ password, current }) }),
 };
 
 export function errorText(e: unknown): string {
@@ -65,6 +80,10 @@ export function errorText(e: unknown): string {
     case 'limit_reached': return 'Limite de 100 contatos atingido.';
     case 'too_many_attempts': return 'Muitas tentativas. Aguarde um minuto.';
     case 'invalid_code': return 'Código de acesso inválido.';
+    case 'wrong_password': return 'Senha incorreta.';
+    case 'invalid_password': return 'A senha precisa ter de 4 a 64 caracteres.';
+    case 'password_not_set': return 'Crie uma senha primeiro.';
+    case 'not_found': return 'Contato não encontrado (já foi excluído?).';
     default: return 'Sem conexão com o servidor AirGuard.';
   }
 }

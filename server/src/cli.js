@@ -3,6 +3,7 @@
 //   npm run user:list                users (no codes)
 //   npm run user:revoke -- <id>      disable a user's link
 //   npm run device:add -- "ESP32"    key for the ESP32 (X-Device-Key)
+//   node src/cli.js user:password-reset <id>   forgotten edit password: the user sets a new one
 // The running server picks up changes by itself (no restart needed).
 import { config } from './config.js';
 import { Store } from './store.js';
@@ -25,11 +26,16 @@ switch (cmd) {
   }
   case 'user:list':
     for (const u of store.data.users)
-      console.log(`${u.id.slice(0, 8)}  ${u.revoked ? 'REVOKED' : 'active '}  ${u.name}  (${store.contactsOf(u.id).length} contacts)`);
+      console.log(`${u.id.slice(0, 8)}  ${u.revoked ? 'REVOKED' : 'active '}  ${u.name}  (${store.contactsOf(u.id).length} contacts, ${u.passwordHash ? 'password set' : 'no password'})`);
     break;
   case 'user:revoke': {
     const u = args[0] && store.revokeUser(args[0]);
     console.log(u ? `User "${u.name}" revoked.` : 'usage: npm run user:revoke -- <id>');
+    break;
+  }
+  case 'user:password-reset': {
+    const u = args[0] && store.setPassword(args[0], null);
+    console.log(u ? `Edit password of "${u.name}" removed; a new one is set in the app.` : 'usage: user:password-reset <id>');
     break;
   }
   case 'device:add': {
@@ -41,6 +47,6 @@ switch (cmd) {
     break;
   }
   default:
-    console.error('commands: user:add, user:list, user:revoke, device:add');
+    console.error('commands: user:add, user:list, user:revoke, user:password-reset, device:add');
     process.exit(1);
 }

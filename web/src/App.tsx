@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react';
-import { api, errorText, forgetCode, takeCodeFromUrl, ApiError, type Contact } from './api';
+import { api, errorText, forgetCode, takeCodeFromUrl, ApiError, type Contact, type ContactInput } from './api';
 import { CATEGORIES, CategoryIcon, categoryOf, type CategoryId } from './categories';
 
 type Phase = 'loading' | 'denied' | 'ready';
+// create = first time (no password yet), enter = unlock editing, change = new password
+type PwMode = 'create' | 'enter' | 'change';
 
 function initials(name: string) {
   // letters only: "Maria (vizinha)" -> "MV"
@@ -22,9 +24,13 @@ export default function App() {
   const [contacts, setContacts] = useState<Contact[]>([]);
   const [query, setQuery] = useState('');
   const [filter, setFilter] = useState<CategoryId | null>(null);
-  const [sheet, setSheet] = useState(false);
+  const [sheet, setSheet] = useState<{ edit: Contact | null } | null>(null);
   const [toast, setToast] = useState<{ text: string; kind: 'ok' | 'err' } | null>(null);
   const [confirmId, setConfirmId] = useState<string | null>(null);
+  const [hasPw, setHasPw] = useState(false);
+  // Edit password, only in memory (asked again after a reload).
+  const [pw, setPw] = useState<string | null>(null);
+  const [pwSheet, setPwSheet] = useState<{ mode: PwMode; then?: (pw: string) => void } | null>(null);
 
   const notify = useCallback((text: string, kind: 'ok' | 'err' = 'ok') => {
     setToast({ text, kind });
@@ -36,6 +42,7 @@ export default function App() {
     try {
       const [me, list] = await Promise.all([api.me(code), api.list(code)]);
       setUser(me.name);
+      setHasPw(me.hasPassword);
       setContacts(list);
       setPhase('ready');
     } catch (e) {
@@ -67,14 +74,43 @@ export default function App() {
   // drop a filter whose last contact was removed
   useEffect(() => { if (filter && !used.some((k) => k.id === filter)) setFilter(null); }, [filter, used]);
 
-  async function remove(id: string) {
+  // Runs `fn` with the edit password, asking for it (or to create one) first.
+  function withPw(fn: (pw: string) => void) {
+    if (pw) fn(pw);
+    else setPwSheet({ mode: hasPw ? 'enter' : 'create', then: fn });
+  }
+
+  // A password refused by the server (changed on another phone): forget it.
+  function failed(e: unknown) {
+    if (e instanceof ApiError && (e.code === 'wrong_password' || e.code === 'password_not_set')) {
+      setPw(null);
+      if (e.code === 'password_not_set') setHasPw(false);
+    }
+    notify(errorText(e), 'err');
+  }
+
+  async function remove(id: string, password: string) {
     if (!code) return;
     try {
-      await api.remove(code, id);
+      await api.remove(code, password, id);
       setContacts((l) => l.filter((c) => c.id !== id));
       notify('Contato removido');
-    } catch (e) { notify(errorText(e), 'err'); }
+    } catch (e) { failed(e); }
     setConfirmId(null);
+  }
+
+  // Throws the API error so the sheet can show it next to the fields.
+  async function save(v: ContactInput, edit: Contact | null) {
+    if (!code || !pw) throw new ApiError(403, 'wrong_password');
+    try {
+      const c = edit ? await api.update(code, pw, edit.id, v) : await api.add(code, pw, v);
+      setContacts((l) => [...l.filter((x) => x.id !== c.id), c].sort((a, b) => a.name.localeCompare(b.name, 'pt-BR')));
+      setSheet(null);
+      notify(edit ? 'Contato atualizado' : 'Contato cadastrado');
+    } catch (e) {
+      if (e instanceof ApiError && e.code === 'wrong_password') { setPw(null); setSheet(null); }
+      throw e;
+    }
   }
 
   if (phase === 'denied') return <Denied />;
@@ -90,10 +126,12 @@ export default function App() {
             <p className="sub">CONTATOS ÚTEIS</p>
           </div>
         </div>
-        <div className="user" title="Usuário conectado">
-          <span className="dot" />
+        <button className="user" title={hasPw ? 'Trocar a senha de edição' : 'Criar a senha de edição'}
+          onClick={() => setPwSheet({ mode: hasPw ? 'change' : 'create' })}>
+          <span className={`dot ${pw ? '' : 'locked'}`} />
           <span className="uname">{user || '···'}</span>
-        </div>
+          <svg className="key" viewBox="0 0 24 24" aria-hidden><circle cx="8" cy="15" r="4" /><path d="m11 12 9-9M17 6l3 3M15 8l2 2" /></svg>
+        </button>
       </header>
 
       <section className="hud">
@@ -149,14 +187,19 @@ export default function App() {
             <div className={`avatar ${cat.id === 'outro' ? '' : 'svc'}`} title={cat.label}>
               {cat.id === 'outro' ? initials(c.name) : <CategoryIcon id={cat.id} />}
             </div>
-            <div className="info">
+            <button className="info" onClick={() => withPw(() => setSheet({ edit: c }))} aria-label={`Editar ${c.name}`}>
               <h2>{c.name}</h2>
-              <p className="meta"><span className="tag">{cat.label}</span></p>
-              <p className="phone">{c.phoneDisplay}</p>
-            </div>
+              <p className="meta">
+                <span className="tag">{cat.label}</span>
+                <span className="edit-hint" aria-hidden>
+                  <svg viewBox="0 0 24 24"><path d="M4 20h4L19 9l-4-4L4 16z" /><path d="m13.5 6.5 4 4" /></svg>
+                </span>
+              </p>
+              <p className="phone">{c.phoneDisplay.replace(/^\+55 /, '')}</p>
+            </button>
             {confirmId === c.id ? (
               <div className="confirm">
-                <button className="chip danger" onClick={() => void remove(c.id)}>Excluir</button>
+                <button className="chip danger" onClick={() => withPw((p) => void remove(c.id, p))}>Excluir</button>
                 <button className="chip" onClick={() => setConfirmId(null)}>Cancelar</button>
               </div>
             ) : (
@@ -177,18 +220,26 @@ export default function App() {
         })}
       </main>
 
-      <button className="fab" onClick={() => setSheet(true)} aria-label="Cadastrar contato">
+      <button className="fab" onClick={() => withPw(() => setSheet({ edit: null }))} aria-label="Cadastrar contato">
         <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14" /></svg>
       </button>
 
       {sheet && code && (
-        <AddSheet
+        <ContactSheet edit={sheet.edit} onClose={() => setSheet(null)} onSave={(v) => save(v, sheet.edit)} />
+      )}
+
+      {pwSheet && code && (
+        <PasswordSheet
           code={code}
-          onClose={() => setSheet(false)}
-          onAdded={(c) => {
-            setContacts((l) => [...l, c].sort((a, b) => a.name.localeCompare(b.name, 'pt-BR')));
-            setSheet(false);
-            notify('Contato cadastrado');
+          mode={pwSheet.mode}
+          onClose={() => setPwSheet(null)}
+          onDone={(p) => {
+            const then = pwSheet.then;
+            if (pwSheet.mode !== 'enter') notify(pwSheet.mode === 'create' ? 'Senha criada' : 'Senha alterada');
+            setHasPw(true);
+            setPw(p);
+            setPwSheet(null);
+            then?.(p);
           }}
         />
       )}
@@ -198,27 +249,28 @@ export default function App() {
   );
 }
 
-function AddSheet({ code, onClose, onAdded }: { code: string; onClose: () => void; onAdded: (c: Contact) => void }) {
-  const [name, setName] = useState('');
-  const [phone, setPhone] = useState('');
-  const [category, setCategory] = useState<CategoryId>('farmacia');
+function ContactSheet({ edit, onClose, onSave }: { edit: Contact | null; onClose: () => void; onSave: (v: ContactInput) => Promise<void> }) {
+  const [name, setName] = useState(edit?.name ?? '');
+  // editing: show the number the way people type it, e.g. (11) 98888-7777
+  const [phone, setPhone] = useState(edit ? edit.phoneDisplay.replace(/^\+55 /, '') : '');
+  const [category, setCategory] = useState<CategoryId>(edit ? categoryOf(edit.category).id : 'farmacia');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  const unchanged = !!edit && name.trim() === edit.name && phone === edit.phoneDisplay.replace(/^\+55 /, '') && category === categoryOf(edit.category).id;
 
   async function submit(e: FormEvent) {
     e.preventDefault();
     setError('');
     setBusy(true);
-    try { onAdded(await api.add(code, name, phone, category)); }
-    catch (err) { setError(errorText(err)); }
-    finally { setBusy(false); }
+    try { await onSave({ name, phone, category }); }
+    catch (err) { setError(errorText(err)); setBusy(false); }
   }
 
   return (
     <div className="overlay" onClick={onClose}>
       <form className="sheet" onSubmit={submit} onClick={(e) => e.stopPropagation()}>
         <div className="grab" />
-        <h3>NOVO CONTATO</h3>
+        <h3>{edit ? 'EDITAR CONTATO' : 'NOVO CONTATO'}</h3>
         <fieldset className="cats">
           <legend>Serviço</legend>
           <div className="cat-grid" role="radiogroup">
@@ -244,8 +296,76 @@ function AddSheet({ code, onClose, onAdded }: { code: string; onClose: () => voi
         {error && <p className="err">{error}</p>}
         <div className="row">
           <button type="button" className="ghost" onClick={onClose}>Cancelar</button>
-          <button type="submit" className="primary" disabled={busy || !name.trim() || !phone.trim()}>
-            {busy ? 'Salvando…' : 'Cadastrar'}
+          <button type="submit" className="primary" disabled={busy || unchanged || !name.trim() || !phone.trim()}>
+            {busy ? 'Salvando…' : edit ? 'Salvar' : 'Cadastrar'}
+          </button>
+        </div>
+      </form>
+    </div>
+  );
+}
+
+function PasswordSheet({ code, mode, onClose, onDone }: { code: string; mode: PwMode; onClose: () => void; onDone: (pw: string) => void }) {
+  const [current, setCurrent] = useState('');
+  const [p1, setP1] = useState('');
+  const [p2, setP2] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const [show, setShow] = useState(false);
+  const creating = mode !== 'enter';
+  const tooShort = creating && [...p1].length < 4;
+  const mismatch = creating && p2.length > 0 && p1 !== p2;
+
+  async function submit(e: FormEvent) {
+    e.preventDefault();
+    setError('');
+    if (creating && p1 !== p2) { setError('As senhas não conferem.'); return; }
+    setBusy(true);
+    try {
+      if (mode === 'enter') await api.checkPassword(code, p1);
+      else await api.setPassword(code, p1, mode === 'change' ? current : undefined);
+      onDone(p1);
+    } catch (err) { setError(errorText(err)); setBusy(false); }
+  }
+
+  const type = show ? 'text' : 'password';
+  return (
+    <div className="overlay" onClick={onClose}>
+      <form className="sheet" onSubmit={submit} onClick={(e) => e.stopPropagation()}>
+        <div className="grab" />
+        <h3>{mode === 'create' ? 'CRIAR SENHA' : mode === 'change' ? 'TROCAR SENHA' : 'SENHA'}</h3>
+        <p className="hint pw-hint">
+          {mode === 'create' && 'Crie uma senha para proteger seus contatos. Ela será pedida para cadastrar, editar ou excluir.'}
+          {mode === 'enter' && 'Digite sua senha para cadastrar, editar ou excluir contatos.'}
+          {mode === 'change' && 'Informe a senha atual e escolha uma nova.'}
+        </p>
+        {mode === 'change' && (
+          <label>
+            <span>Senha atual</span>
+            <input type={type} value={current} onChange={(e) => setCurrent(e.target.value)} autoComplete="current-password" maxLength={64} required autoFocus />
+          </label>
+        )}
+        <label>
+          <span>{creating ? 'Nova senha' : 'Senha'}</span>
+          <input type={type} value={p1} onChange={(e) => setP1(e.target.value)} maxLength={64} required autoFocus={mode !== 'change'}
+            autoComplete={creating ? 'new-password' : 'current-password'} placeholder={creating ? 'mínimo 4 caracteres' : ''} />
+        </label>
+        {creating && (
+          <label>
+            <span>Repita a nova senha</span>
+            <input type={type} value={p2} onChange={(e) => setP2(e.target.value)} maxLength={64} required autoComplete="new-password" />
+          </label>
+        )}
+        <label className="show-pw">
+          <input type="checkbox" checked={show} onChange={(e) => setShow(e.target.checked)} />
+          <span>Mostrar senha</span>
+        </label>
+        {mismatch && !error && <p className="err">As senhas não conferem.</p>}
+        {error && <p className="err">{error}</p>}
+        <div className="row">
+          <button type="button" className="ghost" onClick={onClose}>Cancelar</button>
+          <button type="submit" className="primary" disabled={busy || !p1 || tooShort || mismatch || (creating && !p2) || (mode === 'change' && !current)}>
+            {busy ? 'Verificando…' : mode === 'enter' ? 'Desbloquear' : 'Salvar senha'}
           </button>
         </div>
       </form>

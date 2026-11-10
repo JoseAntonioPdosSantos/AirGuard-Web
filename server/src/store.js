@@ -59,6 +59,14 @@ export class Store {
     this.save();
     return u;
   }
+  setPassword(userId, passwordHash) {
+    this.refresh();
+    const u = this.data.users.find((x) => x.id === userId || x.id.startsWith(userId));
+    if (!u) return null;
+    if (passwordHash) u.passwordHash = passwordHash; else delete u.passwordHash;
+    this.save();
+    return u;
+  }
   activeUsers() { this.refresh(); return this.data.users.filter((u) => !u.revoked); }
   activeDevices() { this.refresh(); return this.data.devices.filter((d) => !d.revoked); }
 
@@ -71,6 +79,14 @@ export class Store {
     this.refresh();
     const c = { id: randomUUID(), ownerId: userId, name, phone, category, createdAt: new Date().toISOString() };
     this.data.contacts.push(c);
+    this.save();
+    return c;
+  }
+  updateContact(userId, id, fields) {
+    this.refresh();
+    const c = this.data.contacts.find((x) => x.id === id && x.ownerId === userId);
+    if (!c) return null;
+    Object.assign(c, fields, { updatedAt: new Date().toISOString() });
     this.save();
     return c;
   }

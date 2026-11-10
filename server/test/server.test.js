@@ -7,6 +7,7 @@ import { createApp, FailLimiter } from '../src/app.js';
 import { Store } from '../src/store.js';
 import { newToken, hashToken, looksLikeToken } from '../src/tokens.js';
 import { normalizePhone, formatPhone, cleanName } from '../src/phone.js';
+import { hashPassword, checkPassword } from '../src/passwords.js';
 
 // ---- pure helpers -----------------------------------------------------------
 test('tokens: 256-bit, base64url, unique, hash only', () => {
@@ -39,13 +40,16 @@ test('names: trimmed, control chars removed, 1..40 chars', () => {
 
 // ---- HTTP API -----------------------------------------------------------------
 let dir, store, server, base, tokA, tokB, devKey, now = 0;
+const PW = 'cozinha42';  // edit password of Ana and Bruno
 const limiter = new FailLimiter({ max: 5, windowMs: 60_000, now: () => now });
 
 before(async () => {
   dir = mkdtempSync(join(tmpdir(), 'agw-'));
   store = new Store(join(dir, 'db.json'));
   tokA = newToken(); store.addUser('Ana', hashToken(tokA));
-  tokB = newToken(); store.addUser('Bruno', hashToken(tokB));
+  tokB = newToken(); const b = store.addUser('Bruno', hashToken(tokB));
+  store.setPassword(store.data.users[0].id, hashPassword(PW));
+  store.setPassword(b.id, hashPassword(PW));
   devKey = newToken(); store.addDevice('ESP32', hashToken(devKey));
   server = createApp(store, { limiter }).listen(0, '127.0.0.1');
   await new Promise((r) => server.once('listening', r));
@@ -54,14 +58,14 @@ before(async () => {
 after(() => { server.close(); rmSync(dir, { recursive: true, force: true }); });
 
 const api = (path, tok, init = {}) =>
-  fetch(base + path, { ...init, headers: { 'content-type': 'application/json', ...(tok ? { authorization: `Bearer ${tok}` } : {}), ...(init.headers || {}) } });
+  fetch(base + path, { ...init, headers: { 'content-type': 'application/json', 'x-edit-password': PW, ...(tok ? { authorization: `Bearer ${tok}` } : {}), ...(init.headers || {}) } });
 
 test('API: rejects missing / wrong codes', async () => {
   assert.equal((await api('/api/me')).status, 401);
   assert.equal((await api('/api/me', newToken())).status, 401);
   const r = await api('/api/me', tokA);
   assert.equal(r.status, 200);
-  assert.deepEqual(await r.json(), { name: 'Ana' });
+  assert.deepEqual(await r.json(), { name: 'Ana', hasPassword: true });
   assert.equal(r.headers.get('referrer-policy'), 'no-referrer');
 });
 
@@ -125,6 +129,73 @@ test('API: CLI changes are seen without restart; revoked users lose access', asy
   assert.equal((await api('/api/me', tokC)).status, 200);
   other.revokeUser(u.id);
   assert.equal((await api('/api/me', tokC)).status, 401);
+});
+
+test('passwords: scrypt hash, salted, checked', () => {
+  const h = hashPassword('abcd');
+  assert.match(h, /^scrypt\$[0-9a-f]{32}\$[0-9a-f]{64}$/);
+  assert.notEqual(h, hashPassword('abcd'));
+  assert.ok(checkPassword('abcd', h));
+  assert.ok(!checkPassword('abce', h));
+  assert.ok(!checkPassword('abcd', 'garbage'));
+});
+
+test('API: add / edit / delete need the edit password', async () => {
+  now += 61_000;  // fresh limiter window
+  const body = JSON.stringify({ name: 'Gás', phone: '1140041234', category: 'gas' });
+  let r = await api('/api/contacts', tokA, { method: 'POST', body, headers: { 'x-edit-password': '' } });
+  assert.equal(r.status, 403);
+  r = await api('/api/contacts', tokA, { method: 'POST', body, headers: { 'x-edit-password': 'errada' } });
+  assert.equal(r.status, 403);
+  assert.deepEqual(await r.json(), { error: 'wrong_password' });
+  r = await api('/api/contacts', tokA, { method: 'POST', body });
+  assert.equal(r.status, 201);
+  const c = await r.json();
+  assert.equal((await api(`/api/contacts/${c.id}`, tokA, { method: 'DELETE', headers: { 'x-edit-password': 'x' } })).status, 403);
+  assert.equal((await api(`/api/contacts/${c.id}`, tokA, { method: 'DELETE' })).status, 204);
+  now += 61_000;  // the wrong guesses above count in the limiter
+});
+
+test('API: edit a contact (name, phone, category); validated, per user', async () => {
+  now += 61_000;
+  let r = await api('/api/contacts', tokA, { method: 'POST', body: JSON.stringify({ name: 'Farmácia', phone: '1132320000', category: 'farmacia' }) });
+  const c = await r.json();
+  await api('/api/contacts', tokA, { method: 'POST', body: JSON.stringify({ name: 'Outro', phone: '1132321111' }) });
+  r = await api(`/api/contacts/${c.id}`, tokA, { method: 'PUT', body: JSON.stringify({ name: 'Drogaria 24h', phone: '(11) 3232-9999', category: 'farmacia' }) });
+  assert.equal(r.status, 200);
+  const e = await r.json();
+  assert.equal(e.id, c.id);
+  assert.equal(e.name, 'Drogaria 24h');
+  assert.equal(e.phone, '+551132329999');
+  r = await api(`/api/contacts/${c.id}`, tokA, { method: 'PUT', body: JSON.stringify({ name: 'X', phone: '1132321111' }) });
+  assert.equal(r.status, 409);                                                    // number of another contact
+  r = await api(`/api/contacts/${c.id}`, tokA, { method: 'PUT', body: JSON.stringify({ name: 'X', phone: '1132329999', category: 'medico' }) });
+  assert.equal(r.status, 200);                                                    // keeping its own number is fine
+  assert.equal((await api(`/api/contacts/${c.id}`, tokA, { method: 'PUT', body: JSON.stringify({ name: '', phone: '1132329999' }) })).status, 400);
+  assert.equal((await api(`/api/contacts/${c.id}`, tokB, { method: 'PUT', body: JSON.stringify({ name: 'Y', phone: '1132328888' }) })).status, 404);
+});
+
+test('API: set and change the edit password', async () => {
+  now += 61_000;
+  const other = new Store(join(dir, 'db.json'));
+  const tokD = newToken();
+  other.addUser('Davi', hashToken(tokD));
+  const noPw = { 'x-edit-password': '' };
+  assert.deepEqual(await (await api('/api/me', tokD)).json(), { name: 'Davi', hasPassword: false });
+  let r = await api('/api/contacts', tokD, { method: 'POST', body: JSON.stringify({ name: 'A', phone: '1130000000' }), headers: noPw });
+  assert.equal(r.status, 428);                                                    // must create one first
+  assert.equal((await api('/api/password', tokD, { method: 'POST', body: JSON.stringify({ password: 'abc' }) })).status, 400);  // too short
+  assert.equal((await api('/api/password', tokD, { method: 'POST', body: JSON.stringify({ password: 'primeira' }) })).status, 204);
+  assert.equal((await (await api('/api/me', tokD)).json()).hasPassword, true);
+  assert.equal((await api('/api/password/check', tokD, { method: 'POST', headers: { 'x-edit-password': 'primeira' } })).status, 204);
+  assert.equal((await api('/api/password/check', tokD, { method: 'POST', headers: { 'x-edit-password': 'nao' } })).status, 403);
+  // change: the current one is required
+  assert.equal((await api('/api/password', tokD, { method: 'POST', body: JSON.stringify({ password: 'segunda' }) })).status, 403);
+  assert.equal((await api('/api/password', tokD, { method: 'POST', body: JSON.stringify({ password: 'segunda', current: 'primeira' }) })).status, 204);
+  r = await api('/api/contacts', tokD, { method: 'POST', body: JSON.stringify({ name: 'A', phone: '1130000000' }), headers: { 'x-edit-password': 'segunda' } });
+  assert.equal(r.status, 201);
+  assert.ok(!readFileSync(join(dir, 'db.json'), 'utf8').includes('segunda'), 'only the hash is stored');
+  now += 61_000;
 });
 
 test('API: repeated failures from one IP are throttled', async () => {

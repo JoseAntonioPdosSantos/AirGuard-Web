@@ -1,10 +1,13 @@
 // HTTP API + static app. Used by server.js (real port) and by the tests.
 //
 // User API (Authorization: Bearer <user access code>):
-//   GET    /api/me                 -> { name }
+//   GET    /api/me                 -> { name, hasPassword }
+//   POST   /api/password {password, current?}  set (first time) or change the edit password
+//   POST   /api/password/check (X-Edit-Password) -> 204 / 403 wrong_password / 428 password_not_set
 //   GET    /api/contacts           -> [{ id, name, phone, phoneDisplay, category, createdAt }]
-//   POST   /api/contacts {name, phone, category?}
-//   DELETE /api/contacts/:id
+//   POST   /api/contacts {name, phone, category?}        \
+//   PUT    /api/contacts/:id {name, phone, category?}     > need X-Edit-Password
+//   DELETE /api/contacts/:id                             /  (428 password_not_set, 403 wrong_password)
 // Device API for the ESP32 (X-Device-Key: <device key>):
 //   GET    /api/device/contacts    -> { contacts: [{ name, phone, category }] }  (every user's list)
 import express from 'express';
@@ -13,6 +16,7 @@ import { join } from 'node:path';
 import { hashToken, looksLikeToken, sameHash } from './tokens.js';
 import { normalizePhone, formatPhone, cleanName } from './phone.js';
 import { cleanCategory, DEFAULT_CATEGORY } from './categories.js';
+import { checkPassword, hashPassword, validPassword } from './passwords.js';
 
 export const MAX_CONTACTS_PER_USER = 100;
 
@@ -78,20 +82,60 @@ export function createApp(store, { staticDir, limiter = new FailLimiter(), log =
   const view = (c) => ({ id: c.id, name: c.name, phone: c.phone, phoneDisplay: formatPhone(c.phone),
     category: c.category || DEFAULT_CATEGORY, createdAt: c.createdAt });
 
-  app.get('/api/me', authUser, (req, res) => res.json({ name: req.user.name }));
+  app.get('/api/me', authUser, (req, res) => res.json({ name: req.user.name, hasPassword: !!req.user.passwordHash }));
+
+  // Edit password: required to add, edit or delete. Wrong guesses count in the
+  // same per-IP limiter as wrong access codes.
+  const needPassword = (req, res, next) => {
+    const ip = req.socket.remoteAddress || '?';
+    if (!req.user.passwordHash) return res.status(428).json({ error: 'password_not_set' });
+    if (limiter.blocked(ip)) return res.status(429).json({ error: 'too_many_attempts' });
+    if (!checkPassword(req.get('x-edit-password') || '', req.user.passwordHash)) {
+      limiter.fail(ip);
+      log(`wrong edit password for ${req.user.name} from ${ip}`);
+      return res.status(403).json({ error: 'wrong_password' });
+    }
+    next();
+  };
+
+  app.post('/api/password/check', authUser, needPassword, (req, res) => res.status(204).end());
+
+  app.post('/api/password', authUser, (req, res) => {
+    const ip = req.socket.remoteAddress || '?';
+    const { password, current } = req.body || {};
+    const had = !!req.user.passwordHash;
+    if (had) {
+      if (limiter.blocked(ip)) return res.status(429).json({ error: 'too_many_attempts' });
+      if (!checkPassword(current || '', req.user.passwordHash)) {
+        limiter.fail(ip);
+        return res.status(403).json({ error: 'wrong_password' });
+      }
+    }
+    if (!validPassword(password)) return res.status(400).json({ error: 'invalid_password' });
+    store.setPassword(req.user.id, hashPassword(password));
+    log(`edit password ${had ? 'changed' : 'set'} by ${req.user.name}`);
+    res.status(204).end();
+  });
 
   app.get('/api/contacts', authUser, (req, res) => {
     const list = store.contactsOf(req.user.id).sort((a, b) => a.name.localeCompare(b.name, 'pt-BR'));
     res.json(list.map(view));
   });
 
-  app.post('/api/contacts', authUser, (req, res) => {
+  const contactFields = (req, res) => {
     const name = cleanName(req.body?.name);
     const phone = normalizePhone(req.body?.phone);
     const category = cleanCategory(req.body?.category);
-    if (!name) return res.status(400).json({ error: 'invalid_name' });
-    if (!phone) return res.status(400).json({ error: 'invalid_phone' });
-    if (!category) return res.status(400).json({ error: 'invalid_category' });
+    if (!name) { res.status(400).json({ error: 'invalid_name' }); return null; }
+    if (!phone) { res.status(400).json({ error: 'invalid_phone' }); return null; }
+    if (!category) { res.status(400).json({ error: 'invalid_category' }); return null; }
+    return { name, phone, category };
+  };
+
+  app.post('/api/contacts', authUser, needPassword, (req, res) => {
+    const f = contactFields(req, res);
+    if (!f) return;
+    const { name, phone, category } = f;
     const mine = store.contactsOf(req.user.id);
     if (mine.length >= MAX_CONTACTS_PER_USER) return res.status(409).json({ error: 'limit_reached' });
     if (mine.some((c) => c.phone === phone)) return res.status(409).json({ error: 'duplicate_phone' });
@@ -100,7 +144,18 @@ export function createApp(store, { staticDir, limiter = new FailLimiter(), log =
     res.status(201).json(view(c));
   });
 
-  app.delete('/api/contacts/:id', authUser, (req, res) => {
+  app.put('/api/contacts/:id', authUser, needPassword, (req, res) => {
+    const f = contactFields(req, res);
+    if (!f) return;
+    const mine = store.contactsOf(req.user.id);
+    if (!mine.some((c) => c.id === req.params.id)) return res.status(404).json({ error: 'not_found' });
+    if (mine.some((c) => c.phone === f.phone && c.id !== req.params.id)) return res.status(409).json({ error: 'duplicate_phone' });
+    const c = store.updateContact(req.user.id, req.params.id, f);
+    log(`contact edited by ${req.user.name}`);
+    res.json(view(c));
+  });
+
+  app.delete('/api/contacts/:id', authUser, needPassword, (req, res) => {
     if (!store.deleteContact(req.user.id, req.params.id)) return res.status(404).json({ error: 'not_found' });
     res.status(204).end();
   });
