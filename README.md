@@ -54,26 +54,27 @@ A aba **Ambiente** (`/ambiente`, com o mesmo link pessoal) mostra:
   o quadro JSON enviado pelo rádio;
 - as **ocorrências** (alertas e normalizações).
 
-Os dados vêm das linhas `@T` que as placas escrevem na USB (formato em
-`AirGuard-IoT/docs/11_telemetry.md`). A **ponte** `bridge/serial_bridge.py`, que roda no notebook,
-lê as portas e envia as linhas ao servidor. O histórico fica em `data/telemetry/` (um arquivo por
-dia, guardado por 30 dias).
+**De onde vêm os dados:** o **ESP32** é a única placa na rede. Ele registra tudo o que envia e
+recebe pelo LoRa e manda ao servidor pelo **Wi-Fi** (`POST /api/telemetry/ingest`, a cada 2 s),
+sem notebook nem USB. O **RP2040** não grava nada: ele informa o ESP32 pelo próprio LoRa, com o
+RSSI/SNR dentro de cada ACK e um quadro **STAT** a cada 15 s (quais heartbeats ouviu, contadores,
+LCD). Formato dos registros: `AirGuard-IoT/docs/11_telemetry.md`. O histórico fica em
+`data/telemetry/` (um arquivo por dia, guardado por 30 dias).
 
 ```bash
-# 1) chave da ponte (aparece uma única vez); guarde em bridge/device.key
-docker compose exec airguard-web node server/src/cli.js device:add "bridge"
-# 2) ponte: lê todas as /dev/ttyUSB* (ESP32) e /dev/ttyACM* (RP2040)
-~/.platformio/penv/bin/python bridge/serial_bridge.py          # (esse Python já tem pyserial)
-~/.platformio/penv/bin/python bridge/serial_bridge.py --echo   # também mostra o log das placas
-python3 bridge/serial_bridge.py --simulate                     # sem placas: dados sintéticos
+# 1) chave do ESP32 (aparece uma única vez)
+docker compose exec airguard-web node server/src/cli.js device:add "ESP32 KITCHEN_01"
+# 2) no console USB do ESP32 (uma vez; fica salvo na flash):
+#      net ssid <rede>   net pass <senha>   net server http://192.168.1.10:8787   net key <chave>
+#    ou preencha AirGuard-IoT/src/config/net_secrets.h antes de gravar o firmware
+# 3) sem placas, dados sintéticos no mesmo formato:
+python3 tools/simulate_node.py --key <chave> --server http://127.0.0.1:8787
 ```
 
-- Basta o **RP2040** na USB: as leituras chegam pelo heartbeat LoRa a cada 5 s. Com o **ESP32**
-  também na USB, as leituras chegam a cada 2 s e o painel mostra o lado do envio (tentativas, tempo
-  no ar, pacotes perdidos no ar).
-- A ponte **ocupa a porta serial**. Para usar `pio device monitor` ou `tools/console.py`, pare a
-  ponte, ou use `--echo` para ver o log.
-- A ponte abre as portas sem pulsar DTR/RTS, então o ESP32 **não reinicia**.
+- Se o Wi-Fi ou o servidor cair, o ESP32 guarda os registros na RAM (cerca de 2 a 3 minutos) e
+  envia depois, com o horário certo. O alarme local não depende da rede.
+- O servidor dá a cada registro o horário de chegada menos a idade informada pelo ESP32
+  (`now - ms`): a placa não precisa de relógio.
 
 ## Administração
 
@@ -132,7 +133,7 @@ Não rode o modo sem Docker e o container ao mesmo tempo: os dois usam a porta 8
 | GET | `/api/telemetry/state` | código | leituras atuais, placas online, enlace LoRa, últimos 120 pacotes e alertas |
 | GET | `/api/telemetry/history?range=1h\|6h\|24h\|7d\|30d` | código | séries agregadas (média, mín, máx) + alertas do período |
 | GET | `/api/telemetry/stream` | código | `text/event-stream`: `status` (a cada 3 s), `env`, `packet`, `alert`, `gw`, `boot` |
-| POST | `/api/telemetry/ingest` `{records:[...]}` | `X-Device-Key` | `{ kept }` (usado pela ponte; lote de até 5000 registros) |
+| POST | `/api/telemetry/ingest` `{now, records:[...]}` | `X-Device-Key` | `{ kept }` (ESP32 pelo Wi-Fi; lote de até 5000 registros) |
 
 - Categorias (`category`): `farmacia`, `medico`, `gas`, `agua`, `mercado`, `delivery`, `marido`,
   `eletricista`, `encanador`, `chaveiro`, `eletro`, `outro`. Sem categoria vira `outro` (contatos

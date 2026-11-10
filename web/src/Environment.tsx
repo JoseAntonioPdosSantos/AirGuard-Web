@@ -98,7 +98,7 @@ export default function Environment({ code }: { code: string }) {
             return [...l.slice(-199), p];
           });
           // animate a packet on the link when it is seen for the first time
-          if (p.rx && (!p.tx || p.rx.t >= p.t)) setPulse({ k: p.key * 10 + (p.rx ? 1 : 0), dir: p.from === 'gw' ? 'down' : 'up', type: p.type });
+          if (p.rx && !p.tx) setPulse({ k: p.key * 10 + (p.rx ? 1 : 0), dir: p.from === 'gw' ? 'down' : 'up', type: p.type });
           else if (p.tx && !p.rx) setPulse({ k: p.key * 10, dir: p.from === 'gw' ? 'down' : 'up', type: p.type });
           break;
         }
@@ -149,7 +149,7 @@ export default function Environment({ code }: { code: string }) {
           <p className="hero-meta">
             <span className={`live ${conn ? 'on' : ''}`} />
             {conn === false ? 'Sem conexão com o servidor, tentando de novo…'
-              : cur ? `Atualizado ${ago(cur.t, srvNow)} · ${cur.via === 'node' ? 'pela USB do ESP32' : 'pelo rádio LoRa (receptor)'}`
+              : cur ? `Atualizado ${ago(cur.t, srvNow)} · pelo Wi-Fi do ESP32`
                 : 'Conectado. Aguardando leituras.'}
             {cur?.sim && ' · SIMULAÇÃO'}
           </p>
@@ -243,6 +243,7 @@ function packetState(p: Packet, gwOnline: boolean, now: number): { text: string;
   if (p.status === 'failed') return { text: 'não entregue', tone: 'bad' };
   if (p.status === 'txerror') return { text: 'erro no envio', tone: 'bad' };
   if (p.status === 'invalid') return { text: 'quadro inválido', tone: 'bad' };
+  if (p.status === 'lost') return { text: 'perdido', tone: 'bad' };
   if (p.status === 'foreign' || p.status === 'other') return { text: 'ignorado', tone: 'muted' };
   if (p.dup) return { text: 'repetido', tone: 'muted' };
   if (p.type === 'ALERT' || p.type === 'RECOVERY') {
@@ -250,9 +251,9 @@ function packetState(p: Packet, gwOnline: boolean, now: number): { text: string;
     if (p.rx) return { text: 'recebido', tone: 'ok' };
     return now - p.t > 10_000 && gwOnline ? { text: 'sem resposta', tone: 'bad' } : { text: 'enviado…', tone: 'wait' };
   }
-  if (p.tx && p.rx) return { text: 'recebido', tone: 'ok' };
-  if (p.rx) return { text: 'recebido', tone: 'ok' };
-  if (p.tx) return now - p.t > 8_000 && gwOnline ? { text: 'perdido', tone: 'bad' } : { text: 'enviado…', tone: 'wait' };
+  if (p.rx) return { text: p.tx ? 'recebido' : 'recebido pelo ESP32', tone: 'ok' };
+  // a heartbeat is confirmed by the receiver's next STAT (every 15 s)
+  if (p.tx) return now - p.t > 60_000 ? { text: 'sem notícia do receptor', tone: 'muted' } : { text: 'enviado…', tone: 'wait' };
   return { text: '–', tone: 'muted' };
 }
 
@@ -281,7 +282,7 @@ function LoraPanel({ status, packets, pulse, now, rssi, from, to, step }: {
 
       <div className="link">
         <Device name="ESP32" role="Sensor da cozinha" id="KITCHEN_01" online={nodeOn} last={status?.node.lastSeen ?? null} now={now}
-          detail={status?.node.boot?.fw ? `firmware ${status.node.boot.fw}` : 'USB: sem dados'} />
+          detail={status?.node.boot?.fw ? `firmware ${status.node.boot.fw} · Wi-Fi` : nodeOn ? 'Wi-Fi' : 'sem dados pelo Wi-Fi'} />
         <div className="wire" aria-hidden>
           <div className="wline" />
           {pulse && <span key={pulse.k} className={`packet ${pulse.dir} t-${pulse.type}`}>{pulse.type === 'HB' ? '' : pulse.type[0]}</span>}
@@ -291,11 +292,11 @@ function LoraPanel({ status, packets, pulse, now, rssi, from, to, step }: {
           </div>
         </div>
         <Device name="RP2040" role="Receptor (gateway)" id="GATEWAY_01" online={gwOn} last={status?.gateway.lastSeen ?? null} now={now}
-          detail={status?.gateway.stat ? `LCD ${status.gateway.stat.lcd ? 'ok' : 'falha'} · rádio ${status.gateway.stat.lora ? 'ok' : 'falha'}` : 'USB: sem dados'} />
+          detail={status?.gateway.stat ? `LCD ${status.gateway.stat.lcd ? 'ok' : 'falha'} · informa pelo LoRa` : 'sem notícias pelo LoRa'} />
       </div>
 
       <div className="kpis">
-        <Kpi label="Sinal (RSSI)" value={link?.rssi != null ? `${link.rssi}` : '–'} unit="dBm" />
+        <Kpi label="Sinal no receptor" value={link?.rssi != null ? `${link.rssi}` : '–'} unit="dBm" />
         <Kpi label="SNR" value={link?.snr != null ? num(link.snr, 0) : '–'} unit="dB" />
         <Kpi label="Perda (10 min)" value={link?.lossPct != null ? num(link.lossPct, 1) : '–'} unit="%"
           hint={link ? `${link.hbReceived} recebidos, ${link.hbLost} perdidos` : ''} />
@@ -303,7 +304,7 @@ function LoraPanel({ status, packets, pulse, now, rssi, from, to, step }: {
           hint="alerta → ACK" />
       </div>
 
-      <LineChart title="Sinal recebido (RSSI)" unit="dBm" decimals={0} color={C_NEUTRAL} data={rssi} from={from} to={to}
+      <LineChart title="Sinal no receptor (RSSI)" unit="dBm" decimals={0} color={C_NEUTRAL} data={rssi} from={from} to={to}
         step={Math.max(step, 60_000)} minSpan={10} height={150} />
 
       <div className="phead sub">
@@ -330,9 +331,11 @@ function LoraPanel({ status, packets, pulse, now, rssi, from, to, step }: {
                 <div className="pdetail">
                   <dl>
                     {p.tx && <><dt>Enviado</dt><dd>{fmtTime(p.tx.t)}{p.tx.airtime != null ? ` · ${p.tx.airtime} ms no ar` : ''}{p.len ? ` · ${p.len} bytes` : ''}</dd></>}
-                    {p.rx && <><dt>Recebido</dt><dd>{fmtTime(p.rx.t)} · RSSI {p.rx.rssi ?? '–'} dBm · SNR {p.rx.snr ?? '–'} dB</dd></>}
-                    {!p.tx && <><dt>Envio</dt><dd>não visto (USB do {up ? 'ESP32' : 'RP2040'} sem dados)</dd></>}
-                    {!p.rx && !p.status && <><dt>Recepção</dt><dd>{gwOn || !up ? 'não registrada' : 'receptor sem dados na USB'}</dd></>}
+                    {p.rx && <><dt>Recebido</dt><dd>
+                      {up ? 'pelo RP2040' : `pelo ESP32 às ${fmtTime(p.rx.t ?? p.t)}`}
+                      {p.rx.rssi != null ? ` · RSSI ${p.rx.rssi} dBm · SNR ${p.rx.snr ?? '–'} dB` : up ? ' (informado no status do receptor)' : ''}
+                    </dd></>}
+                    {!p.rx && !p.status && up && <><dt>Recepção</dt><dd>{gwOn ? 'aguardando o status do receptor' : 'receptor sem notícias'}</dd></>}
                     {p.note && <><dt>Info</dt><dd>{p.note}</dd></>}
                   </dl>
                   {p.frame && <pre>{p.frame}</pre>}
@@ -342,7 +345,7 @@ function LoraPanel({ status, packets, pulse, now, rssi, from, to, step }: {
           );
         })}
       </div>
-      <p className="note">“Sinal de vida” é enviado a cada 5 s pelo ESP32 com as leituras. Alertas precisam de confirmação (ACK) do receptor; sem ela, o ESP32 repete o envio a cada 60 s.</p>
+      <p className="note">“Sinal de vida” é enviado a cada 5 s pelo ESP32 com as leituras; a cada 15 s o receptor responde com um status dizendo quais ouviu e com que sinal. O ESP32 registra tudo o que envia e recebe e manda ao servidor pelo Wi-Fi. Alertas precisam de confirmação (ACK) do receptor; sem ela, o ESP32 repete o envio a cada 60 s.</p>
     </section>
   );
 }

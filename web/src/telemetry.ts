@@ -10,7 +10,7 @@ export interface Limits { gasMedium: number; gasHigh: number; tempLow: number; t
 export interface Levels { air: Sev; temp: Sev; hum: Sev; sys: Sev }
 
 export interface Current {
-  t: number; via: 'node' | 'lora';
+  t: number; via: 'node';
   temp: number | null; hum: number | null; hi?: number | null; gas: number | null;
   levels: Levels | null; overall?: Sev | null;
   airState?: string | null; envState?: string | null; relay?: boolean; sim?: boolean;
@@ -22,9 +22,9 @@ export interface Packet {
   type: string; ref: number | null;
   try?: number; retry?: boolean; len?: number | null;
   tx: { t: number; airtime: number | null; ok: boolean | null } | null;
-  rx: { t: number; rssi: number | null; snr: number | null; res?: string | null } | null;
+  rx: { t: number | null; rssi: number | null; snr: number | null; res?: string | null } | null;
   acked?: number; latency?: number; dup?: boolean;
-  status?: 'failed' | 'txerror' | 'invalid' | 'foreign' | 'other';
+  status?: 'failed' | 'txerror' | 'invalid' | 'foreign' | 'other' | 'lost';
   frame?: string | null; note?: string | null;
 }
 
@@ -35,7 +35,10 @@ export interface Status {
   limits: Limits;
   current: Current | null;
   node: { online: boolean; lastSeen: number | null; boot: { t: number; fw: string | null; boot: number | null } | null };
-  gateway: { online: boolean; lastSeen: number | null; stat: { t: number; lcd: boolean; lora: boolean; lost: boolean } | null };
+  gateway: {
+    online: boolean; lastSeen: number | null;
+    stat: { t: number; lcd: boolean; lora: boolean; lost: boolean; hbs: number | null; miss: number | null; up: number | null } | null;
+  };
   link: {
     rssi: number | null; snr: number | null; hbReceived: number; hbLost: number; lossPct: number | null;
     txCount: number; ackCount: number; failCount: number; ackLatencyMs: number | null;
@@ -119,7 +122,7 @@ export const CAT_LABEL: Record<string, string> = {
 };
 
 export const TYPE_LABEL: Record<string, string> = {
-  HB: 'Sinal de vida', ALERT: 'Alerta', RECOVERY: 'Normalizado', ACK: 'Confirmação', TEXT: 'Mensagem', 'INVÁLIDO': 'Inválido',
+  HB: 'Sinal de vida', ALERT: 'Alerta', RECOVERY: 'Normalizado', ACK: 'Confirmação', STAT: 'Status do receptor', TEXT: 'Mensagem', 'INVÁLIDO': 'Inválido',
 };
 
 export function fmtTime(t: number, withSeconds = true) {

@@ -13,7 +13,7 @@
 //   GET    /api/telemetry/stream   -> text/event-stream (env, packet, alert, gw, boot, status)
 // Device API (X-Device-Key: <device key>):
 //   GET    /api/device/contacts    -> { contacts: [{ name, phone, category }] }  (every user's list)
-//   POST   /api/telemetry/ingest {records: [...]} -> { kept }   (bridge/serial_bridge.py)
+//   POST   /api/telemetry/ingest {now, records: [...]} -> { kept }   (ESP32 node over Wi-Fi)
 import express from 'express';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
@@ -182,7 +182,7 @@ export function createApp(store, { staticDir, telemetry = null, limiter = new Fa
     app.post('/api/telemetry/ingest', authDevice, (req, res) => {
       const records = req.body?.records;
       if (!Array.isArray(records) || records.length > 5000) return res.status(400).json({ error: 'invalid_records' });
-      res.json({ kept: telemetry.ingest(records) });
+      res.json({ kept: telemetry.ingest(records, req.body?.now) });
     });
 
     app.get('/api/telemetry/state', authUser, (req, res) => res.json(telemetry.state()));

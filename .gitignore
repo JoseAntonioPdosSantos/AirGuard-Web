@@ -3,5 +3,4 @@ web/dist/
 data/
 *.log
 shots/
-bridge/device.key
 __pycache__/

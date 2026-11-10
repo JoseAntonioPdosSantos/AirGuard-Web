@@ -1,8 +1,11 @@
 // Telemetry of the AirGuard boards (ESP32 node + RP2040 receiver).
 //
-// The firmwares print "@T {json}" lines on their USB serial ports; the bridge
-// (bridge/serial_bridge.py) adds the PC clock ("pc", ms) and POSTs them here.
-// Record kinds: AirGuard-IoT/docs/12_telemetry.md.
+// The ESP32 node is the only board on the network: it records every frame it
+// sends or receives on LoRa and POSTs the records here over Wi-Fi as
+// {now: <its millis>, records: [...]}. The RP2040 receiver logs nothing: it
+// reports to the node over LoRa (rssi/snr in its ACKs, periodic STAT frames)
+// and the node forwards that as "gw" records.
+// Record kinds: AirGuard-IoT/docs/11_telemetry.md.
 //
 // What this module keeps:
 //   - every accepted record, appended to data/telemetry/YYYY-MM-DD.ndjson
@@ -18,9 +21,11 @@ import { join } from 'node:path';
 export const RETENTION_DAYS = 30;
 export const RAW_HOURS = 48;
 export const LINK_KEEP = 400;
-export const NODE_ONLINE_MS = 10_000;  // node "env" every 2 s
-export const GW_ONLINE_MS = 25_000;    // receiver "stat" every 10 s, HB every 5 s
-const MAX_SKEW_MS = 5 * 60_000;        // PC clock vs server clock
+export const NODE_ONLINE_MS = 20_000;  // node: heartbeat (tx + env) every 5 s, POST every 2 s
+export const GW_ONLINE_MS = 50_000;    // receiver: STAT every 15 s (30 s without heartbeats)
+const MAX_SKEW_MS = 5 * 60_000;        // "pc" clock (simulator) vs server clock
+const MAX_AGE_MS = 3_600_000;          // a record older than this in a batch: use arrival time
+const HB_WINDOW = 32;                  // heartbeats covered by one STAT ("map" bits)
 const MINUTE = 60_000;
 
 // Comfort / alarm bands shown on the charts (the node's thresholds.h).
@@ -95,8 +100,7 @@ export class Telemetry {
     this.alertIds = new Set();
     this.subs = new Set();
     this.node = { lastSeen: 0, env: null, boot: null };
-    this.gw = { lastSeen: 0, stat: null, boot: null, env: null, lastSeq: null, lastRssi: null, lastSnr: null };
-    this.lastNodeEnv = 0;
+    this.gw = { lastSeen: 0, stat: null, boot: null, lastRssi: null, lastSnr: null };
     this.seq = 0;
     if (persist) {
       mkdirSync(dir, { recursive: true });
@@ -106,18 +110,26 @@ export class Telemetry {
   }
 
   // ---- input ---------------------------------------------------------------
-  // records: [{ src, k, ms, pc, ... }] as sent by the bridge. Returns how many were kept.
-  ingest(records) {
+  // records: [{ src, k, ms, ... }]. deviceNow = the sender's millis() when it
+  // posted the batch: a record's time is now - (deviceNow - ms) (the node has
+  // no clock). A record may instead carry "pc" (epoch ms, simulator).
+  // Returns how many records were kept.
+  ingest(records, deviceNow = null) {
     if (!Array.isArray(records)) return 0;
     const now = this.now();
+    const dn = num(deviceNow);
     const lines = [];
     let kept = 0;
     for (const r of records) {
       if (!r || typeof r !== 'object' || Array.isArray(r)) continue;
       if (r.src !== 'node' && r.src !== 'gw') continue;
       if (typeof r.k !== 'string' || r.k.length > 12) continue;
-      let t = num(r.pc) ?? now;
-      if (Math.abs(t - now) > MAX_SKEW_MS) t = now;  // wrong PC clock: use ours
+      let t = now;
+      if (num(r.pc) != null) t = Math.abs(r.pc - now) > MAX_SKEW_MS ? now : r.pc;
+      else if (dn != null && num(r.ms) != null) {
+        const age = (dn - r.ms) >>> 0;  // uint32 difference: survives millis() wrap-around
+        if (age < MAX_AGE_MS) t = now - age;
+      }
       const rec = { ...r, t };
       delete rec.pc;
       this.apply(rec, true);
@@ -164,18 +176,7 @@ export class Telemetry {
       }
     }
     switch (r.k) {
-      case 'boot':
-        this.gw.boot = { t, lora: !!r.lora, lcd: !!r.lcd };
-        this.gw.lastSeq = null;
-        this.emit(live, 'boot', { src: 'gw', t, ...this.gw.boot });
-        return;
-      case 'stat':
-        this.gw.stat = { t, lcd: !!r.lcd, lora: !!r.lora, events: num(r.events), hbs: num(r.hbs), ov: str(r.ov), lost: !!r.lost };
-        this.emit(live, 'gw', this.gw.stat);
-        return;
-      case 'rx': return this.onGwRx(r, live);
-      case 'ack': return this.onGwAck(r, live);
-      case 'ackdrop': return;
+      case 'stat': return this.onGwStat(r, live);
       default: return;
     }
   }
@@ -188,7 +189,6 @@ export class Telemetry {
       relay: !!r.relay, flags: num(r.flags), lora: str(r.lora), queue: num(r.q), waitAck: num(r.wack), uptime: num(r.up),
     };
     this.node.env = env;
-    this.lastNodeEnv = t;
     this.addSample({ t, temp: env.temp, hum: env.hum, hi: env.hi, gas: env.gas, via: 'node' }, live);
   }
 
@@ -211,70 +211,69 @@ export class Telemetry {
     this.emit(live, 'packet', p);
   }
 
-  // ACK from the receiver, seen by the node.
+  // ACK from the receiver, heard by the node. grssi/gsnr: how the receiver
+  // heard the event it confirms.
   onNodeAck(r, live) {
     const id = num(r.id);
-    const rx = { t: r.t, rssi: num(r.rssi), snr: num(r.snr) };
-    let p = this.findPacket((x) => x.from === 'gw' && x.type === 'ACK' && x.ref === id && !x.rx);
-    if (p) { p.rx = rx; this.emit(live, 'packet', p); }
-    else p = this.addPacket(live, { t: r.t, from: 'gw', type: 'ACK', ref: id, tx: null, rx, dup: !!r.dup });
-    // the event it confirms
-    const ev = this.findPacket((x) => x.from === 'node' && x.type !== 'HB' && x.type !== 'ACK' && x.ref === id && !x.acked);
-    if (ev) {
+    const grssi = num(r.grssi), gsnr = num(r.gsnr);
+    this.gwLink(r.t, grssi, gsnr);
+    this.addPacket(live, { t: r.t, from: 'gw', type: 'ACK', ref: id, tx: null,
+      rx: { t: r.t, rssi: num(r.rssi), snr: num(r.snr) }, dup: !!r.dup, frame: str(r.frame, 300) });
+    // the event it confirms (the newest transmission of it)
+    const ev = this.findPacket((x) => x.from === 'node' && x.type !== 'HB' && x.type !== 'ACK' && x.ref === id);
+    if (ev && !ev.acked) {
       ev.acked = r.t;
       ev.latency = r.t - ev.t;
+      ev.rx = { t: null, rssi: grssi, snr: gsnr, res: 'event' };
       this.emit(live, 'packet', ev);
     }
     this.minute(r.t).count('ack');
   }
 
-  // Frame received by the gateway (node -> gateway).
-  onGwRx(r, live) {
+  // Receiver status (STAT frame) as heard and forwarded by the node.
+  //   seq/map: last heartbeat the receiver heard, and which of the HB_WINDOW
+  //   heartbeats up to it it heard (bit i = seq - i) -> each heartbeat the node
+  //   sent is marked received or lost.
+  //   grssi/gsnr: how the receiver hears the node; rssi/snr: how the node heard this STAT.
+  onGwStat(r, live) {
     const t = r.t;
-    const f = parseFrame(r.frame);
-    const { type, ref } = frameInfo(f);
-    const rssi = num(r.rssi), snr = num(r.snr);
+    const up = num(r.up);
+    // a receiver reboot (uptime went back): its counters restarted
+    if (this.gw.stat && up != null && this.gw.stat.up != null && up < this.gw.stat.up) this.gw.boot = { t };
+    this.gw.stat = { t, lcd: !!r.lcd, lora: !!r.lora, lost: !!r.lost, events: num(r.events), hbs: num(r.hbs),
+      miss: num(r.miss), dups: num(r.dups), bad: num(r.bad), seq: num(r.seq), up };
+    this.gwLink(t, num(r.grssi), num(r.gsnr));
+    this.emit(live, 'gw', this.gw.stat);
+    this.addPacket(live, { t, from: 'gw', type: 'STAT', ref: num(r.seq), tx: null,
+      rx: { t, rssi: num(r.rssi), snr: num(r.snr) }, frame: str(r.frame, 300) });
+
+    const seq = num(r.seq), map = num(r.map);
+    if (seq == null || map == null || seq < 1) return;
+    const decided = new Set();
+    for (let i = this.packets.length - 1, n = 0; i >= 0 && n < 300; i -= 1, n += 1) {
+      const p = this.packets[i];
+      if (t - p.t > 10 * MINUTE) break;
+      if (p.from !== 'node' || p.type !== 'HB' || p.ref == null) continue;
+      const back = seq - p.ref;
+      if (back < 0 || back >= HB_WINDOW || decided.has(p.ref)) continue;
+      decided.add(p.ref);  // newest packet with this seq (older ones: before a node reboot)
+      if (p.rx || p.status === 'lost') continue;
+      if ((map >>> back) & 1) p.rx = { t: null, rssi: null, snr: null, res: 'hb' };
+      else p.status = 'lost';
+      this.minute(p.t).count(p.rx ? 'hb' : 'lost');
+      this.emit(live, 'packet', p);
+    }
+  }
+
+  // The receiver is alive and hears the node with this rssi/snr.
+  gwLink(t, rssi, snr) {
+    this.gw.lastSeen = Math.max(this.gw.lastSeen, t);
+    if (rssi == null) return;
     this.gw.lastRssi = rssi;
     this.gw.lastSnr = snr;
     const m = this.minute(t);
     m.add('rssi', rssi);
     m.add('snr', snr);
-    m.count('rx');
-    const res = str(r.res, 10);
-    const rx = { t, rssi, snr, res };
-    let p = this.findPacket((x) => x.from === 'node' && x.type === type && x.ref === ref && !x.rx && t - x.t < 15_000);
-    if (p) { p.rx = rx; this.emit(live, 'packet', p); }
-    else p = this.addPacket(live, { t, from: 'node', type, ref, tx: null, rx, len: num(r.len), frame: str(r.frame, 300) });
-    if (res === 'dup') { p.dup = true; }
-    if (res === 'invalid' || res === 'foreign' || res === 'other') p.status = res;
-
-    if (type === 'HB' && res === 'hb' && f) {
-      const seq = num(f.seq);
-      if (seq != null) {
-        m.count('hb');
-        const last = this.gw.lastSeq;
-        // a gap in the sequence = heartbeats the receiver did not hear
-        if (last != null && seq > last && seq - last - 1 < 1000) m.count('lost', seq - last - 1);
-        this.gw.lastSeq = seq;
-      }
-      // readings over the radio: used when the node's USB is not connected
-      if (t - this.lastNodeEnv > NODE_ONLINE_MS) {
-        const air = num(f.air_index);
-        this.gw.env = { t, temp: num(f.temperature), hum: num(f.humidity), gas: air == null ? null : air / 20,
-          levels: levelsFromLetters(f.levels) };
-        this.addSample({ t, temp: this.gw.env.temp, hum: this.gw.env.hum, hi: null, gas: this.gw.env.gas, via: 'lora' }, live);
-      }
-    }
-    if ((type === 'ALERT' || type === 'RECOVERY') && f && res === 'event') {
-      this.onAlert({ t, id: num(f.event_id), type, cat: str(f.category), sev: str(f.severity), prev: str(f.prev) }, live);
-    }
-  }
-
-  // ACK transmitted by the gateway.
-  onGwAck(r, live) {
-    const id = num(r.id);
-    const p = { t: r.t, from: 'gw', type: 'ACK', ref: id, tx: { t: r.t, ok: true, airtime: null }, rx: null, frame: str(r.frame, 300) };
-    this.addPacket(live, p);
   }
 
   onAlert(a, live) {
@@ -340,8 +339,7 @@ export class Telemetry {
     const lat = this.packets.filter((p) => p.latency != null).slice(-10).map((p) => p.latency);
     const nodeOnline = now - this.node.lastSeen < NODE_ONLINE_MS;
     const gwOnline = now - this.gw.lastSeen < GW_ONLINE_MS;
-    const current = nodeOnline && this.node.env ? { ...this.node.env, via: 'node' }
-      : this.gw.env && now - this.gw.env.t < GW_ONLINE_MS ? { ...this.gw.env, via: 'lora' } : null;
+    const current = nodeOnline && this.node.env ? { ...this.node.env, via: 'node' } : null;
     return {
       now,
       limits: this.limits,
@@ -437,7 +435,7 @@ export class Telemetry {
       }
     }
     // the live state is not known after a restart: only history is replayed
-    this.node.lastSeen = 0; this.gw.lastSeen = 0; this.gw.lastSeq = null;
+    this.node.lastSeen = 0; this.gw.lastSeen = 0;
     return n;
   }
 }
