@@ -9,5 +9,6 @@ export const config = {
   // Address printed in the access links (the laptop's fixed LAN IP).
   publicBase: process.env.PUBLIC_BASE || 'http://192.168.1.10:8787',
   dataFile: process.env.DATA_FILE || join(root, 'data', 'db.json'),
+  telemetryDir: process.env.TELEMETRY_DIR || join(root, 'data', 'telemetry'),
   staticDir: join(root, 'web', 'dist'),
 };

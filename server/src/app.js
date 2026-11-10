@@ -8,8 +8,12 @@
 //   POST   /api/contacts {name, phone, category?}        \
 //   PUT    /api/contacts/:id {name, phone, category?}     > need X-Edit-Password
 //   DELETE /api/contacts/:id                             /  (428 password_not_set, 403 wrong_password)
-// Device API for the ESP32 (X-Device-Key: <device key>):
+//   GET    /api/telemetry/state    -> current readings, boards online, last radio packets
+//   GET    /api/telemetry/history?range=1h|6h|24h|7d|30d -> bucketed series + alerts
+//   GET    /api/telemetry/stream   -> text/event-stream (env, packet, alert, gw, boot, status)
+// Device API (X-Device-Key: <device key>):
 //   GET    /api/device/contacts    -> { contacts: [{ name, phone, category }] }  (every user's list)
+//   POST   /api/telemetry/ingest {records: [...]} -> { kept }   (bridge/serial_bridge.py)
 import express from 'express';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
@@ -46,7 +50,9 @@ function findByToken(list, token) {
   return found;
 }
 
-export function createApp(store, { staticDir, limiter = new FailLimiter(), log = () => {} } = {}) {
+export const STATUS_PERIOD_MS = 3000;
+
+export function createApp(store, { staticDir, telemetry = null, limiter = new FailLimiter(), log = () => {} } = {}) {
   const app = express();
   app.disable('x-powered-by');
   app.set('trust proxy', false);
@@ -62,7 +68,9 @@ export function createApp(store, { staticDir, limiter = new FailLimiter(), log =
     });
     next();
   });
-  app.use('/api', express.json({ limit: '4kb' }));
+  const smallJson = express.json({ limit: '4kb' });
+  const ingestJson = express.json({ limit: '1mb' });  // a batch of telemetry lines
+  app.use('/api', (req, res, next) => (req.path === '/telemetry/ingest' ? ingestJson : smallJson)(req, res, next));
   app.use('/api', (req, res, next) => { res.set('Cache-Control', 'no-store'); next(); });
 
   const authUser = (req, res, next) => {
@@ -160,11 +168,43 @@ export function createApp(store, { staticDir, limiter = new FailLimiter(), log =
     res.status(204).end();
   });
 
-  app.get('/api/device/contacts', (req, res) => {
+  const authDevice = (req, res, next) => {
     const ip = req.socket.remoteAddress || '?';
     if (limiter.blocked(ip)) return res.status(429).json({ error: 'too_many_attempts' });
     const dev = findByToken(store.activeDevices(), req.get('x-device-key') || '');
     if (!dev) { limiter.fail(ip); return res.status(401).json({ error: 'invalid_key' }); }
+    req.device = dev;
+    next();
+  };
+
+  // ---- telemetry (ambiente + LoRa) -----------------------------------------
+  if (telemetry) {
+    app.post('/api/telemetry/ingest', authDevice, (req, res) => {
+      const records = req.body?.records;
+      if (!Array.isArray(records) || records.length > 5000) return res.status(400).json({ error: 'invalid_records' });
+      res.json({ kept: telemetry.ingest(records) });
+    });
+
+    app.get('/api/telemetry/state', authUser, (req, res) => res.json(telemetry.state()));
+
+    app.get('/api/telemetry/history', authUser, (req, res) => res.json(telemetry.history(String(req.query.range || '24h'))));
+
+    app.get('/api/telemetry/stream', authUser, (req, res) => {
+      res.set({ 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-store', Connection: 'keep-alive', 'X-Accel-Buffering': 'no' });
+      res.flushHeaders();
+      const send = (type, data) => res.write(`event: ${type}\ndata: ${JSON.stringify(data)}\n\n`);
+      const status = () => {
+        const { packets, alerts, ...s } = telemetry.state();  // eslint-disable-line no-unused-vars
+        send('status', s);
+      };
+      status();
+      const unsubscribe = telemetry.subscribe(send);
+      const timer = setInterval(status, STATUS_PERIOD_MS);
+      req.on('close', () => { clearInterval(timer); unsubscribe(); });
+    });
+  }
+
+  app.get('/api/device/contacts', authDevice, (req, res) => {
     // Compact, one entry per distinct number (several users may list the same one).
     const seen = new Set();
     const contacts = [];
