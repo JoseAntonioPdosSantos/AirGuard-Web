@@ -1,6 +1,10 @@
 import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react';
 import { api, errorText, forgetCode, takeCodeFromUrl, ApiError, type Contact, type ContactInput } from './api';
 import { CATEGORIES, CategoryIcon, categoryOf, type CategoryId } from './categories';
+import Environment from './Environment';
+
+type Route = 'contatos' | 'ambiente';
+const routeFromPath = (): Route => (window.location.pathname.startsWith('/ambiente') ? 'ambiente' : 'contatos');
 
 type Phase = 'loading' | 'denied' | 'ready';
 // create = first time (no password yet), enter = unlock editing, change = new password
@@ -20,6 +24,18 @@ function waLink(e164: string) {
 export default function App() {
   const [code] = useState(() => takeCodeFromUrl());
   const [phase, setPhase] = useState<Phase>(code ? 'loading' : 'denied');
+  const [route, setRoute] = useState<Route>(routeFromPath);
+  useEffect(() => {
+    const on = () => setRoute(routeFromPath());
+    window.addEventListener('popstate', on);
+    return () => window.removeEventListener('popstate', on);
+  }, []);
+  const go = (r: Route) => {
+    if (r === route) return;
+    history.pushState(null, '', r === 'ambiente' ? '/ambiente' : '/');
+    setRoute(r);
+    window.scrollTo(0, 0);
+  };
   const [user, setUser] = useState('');
   const [contacts, setContacts] = useState<Contact[]>([]);
   const [query, setQuery] = useState('');
@@ -116,14 +132,14 @@ export default function App() {
   if (phase === 'denied') return <Denied />;
 
   return (
-    <div className="app">
+    <div className={`app ${route === 'ambiente' ? 'wide' : ''}`}>
       <div className="bg" aria-hidden />
       <header className="top">
         <div className="brand">
           <img src="/icon.svg" alt="" className="logo" />
           <div>
             <h1>AIRGUARD</h1>
-            <p className="sub">CONTATOS ÚTEIS</p>
+            <p className="sub">{route === 'ambiente' ? 'AMBIENTE' : 'CONTATOS ÚTEIS'}</p>
           </div>
         </div>
         <button className="user" title={hasPw ? 'Trocar a senha de edição' : 'Criar a senha de edição'}
@@ -134,6 +150,18 @@ export default function App() {
         </button>
       </header>
 
+      <nav className="tabs" aria-label="Seções">
+        <button className={route === 'contatos' ? 'on' : ''} aria-current={route === 'contatos' ? 'page' : undefined} onClick={() => go('contatos')}>
+          <svg viewBox="0 0 24 24" aria-hidden><path d="M5 4h4l2 5-2.5 1.5a11 11 0 0 0 5 5L15 13l5 2v4a2 2 0 0 1-2 2A16 16 0 0 1 3 6a2 2 0 0 1 2-2" /></svg>Contatos
+        </button>
+        <button className={route === 'ambiente' ? 'on' : ''} aria-current={route === 'ambiente' ? 'page' : undefined} onClick={() => go('ambiente')}>
+          <svg viewBox="0 0 24 24" aria-hidden><path d="M3 12h4l3-8 4 16 3-8h4" /></svg>Ambiente
+        </button>
+      </nav>
+
+      {route === 'ambiente' && code && <Environment code={code} />}
+
+      {route === 'contatos' && (<>
       <section className="hud">
         <div className="stat">
           <span className="num">{String(contacts.length).padStart(2, '0')}</span>
@@ -223,6 +251,7 @@ export default function App() {
       <button className="fab" onClick={() => withPw(() => setSheet({ edit: null }))} aria-label="Cadastrar contato">
         <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14" /></svg>
       </button>
+      </>)}
 
       {sheet && code && (
         <ContactSheet edit={sheet.edit} onClose={() => setSheet(null)} onSave={(v) => save(v, sheet.edit)} />

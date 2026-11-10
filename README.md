@@ -38,6 +38,43 @@ Endereço na rede local: **http://192.168.1.10:8787**. O IP do notebook foi fixa
 - Senha esquecida: `user:password-reset <id>` apaga a senha, e o usuário cria uma nova no app.
 - Para editar um contato, toque no nome ou no telefone dele.
 
+## Painel Ambiente (telemetria em tempo real)
+
+A aba **Ambiente** (`/ambiente`, com o mesmo link pessoal) mostra:
+
+- o **estado geral** em linguagem simples ("Ambiente seguro", "Atenção: gás acima do normal",
+  "Perigo: gás detectado") e as leituras atuais de temperatura, umidade e gás (com a escala dos
+  limites de 0,90 V e 1,50 V);
+- o **histórico** de 1 h, 6 h, 24 h, 7 dias ou 30 dias: um gráfico por grandeza, com média,
+  mínimo e máximo de cada intervalo, faixa de conforto, linhas dos limites do gás e marcas dos
+  alertas. Cada gráfico tem uma tabela com os mesmos dados;
+- a **comunicação LoRa** entre o ESP32 (KITCHEN_01) e o RP2040 (GATEWAY_01): placas online, RSSI,
+  SNR, perda de pacotes, tempo até a confirmação (ACK) e a lista de pacotes ao vivo. Cada pacote
+  mostra o sentido, o tipo, o estado (recebido, confirmado, perdido, retransmitido) e, ao tocar,
+  o quadro JSON enviado pelo rádio;
+- as **ocorrências** (alertas e normalizações).
+
+Os dados vêm das linhas `@T` que as placas escrevem na USB (formato em
+`AirGuard-IoT/docs/11_telemetry.md`). A **ponte** `bridge/serial_bridge.py`, que roda no notebook,
+lê as portas e envia as linhas ao servidor. O histórico fica em `data/telemetry/` (um arquivo por
+dia, guardado por 30 dias).
+
+```bash
+# 1) chave da ponte (aparece uma única vez); guarde em bridge/device.key
+docker compose exec airguard-web node server/src/cli.js device:add "bridge"
+# 2) ponte: lê todas as /dev/ttyUSB* (ESP32) e /dev/ttyACM* (RP2040)
+~/.platformio/penv/bin/python bridge/serial_bridge.py          # (esse Python já tem pyserial)
+~/.platformio/penv/bin/python bridge/serial_bridge.py --echo   # também mostra o log das placas
+python3 bridge/serial_bridge.py --simulate                     # sem placas: dados sintéticos
+```
+
+- Basta o **RP2040** na USB: as leituras chegam pelo heartbeat LoRa a cada 5 s. Com o **ESP32**
+  também na USB, as leituras chegam a cada 2 s e o painel mostra o lado do envio (tentativas, tempo
+  no ar, pacotes perdidos no ar).
+- A ponte **ocupa a porta serial**. Para usar `pio device monitor` ou `tools/console.py`, pare a
+  ponte, ou use `--echo` para ver o log.
+- A ponte abre as portas sem pulsar DTR/RTS, então o ESP32 **não reinicia**.
+
 ## Administração
 
 Os comandos estão na seção do Docker abaixo. Sem Docker, use `cd server && npm run user:add -- "Maria"`
@@ -76,7 +113,7 @@ export PATH="$HOME/.nvm/versions/node/v20.17.0/bin:$PATH"
 (cd server && npm install && npm start)      # http://0.0.0.0:8787
 ```
 
-Testes do servidor (14, com `node:test`): `cd server && npm test`.
+Testes do servidor (21, com `node:test`): `cd server && npm test`.
 Interface com recarga automática: `cd web && npm run dev` (porta 5174, com proxy para a API em 8787).
 Não rode o modo sem Docker e o container ao mesmo tempo: os dois usam a porta 8787.
 
@@ -92,6 +129,10 @@ Não rode o modo sem Docker e o container ao mesmo tempo: os dois usam a porta 8
 | PUT | `/api/contacts/:id` `{name, phone, category?}` | código + `X-Edit-Password` | 200 / 400 / 404 / 409 `duplicate_phone` / 403 / 428 |
 | DELETE | `/api/contacts/:id` | código + `X-Edit-Password` | 204 / 404 / 403 / 428 |
 | GET | `/api/device/contacts` | `X-Device-Key: <chave>` | `{ contacts: [{ name, phone, category }] }`: números de **todos** os usuários, sem repetição |
+| GET | `/api/telemetry/state` | código | leituras atuais, placas online, enlace LoRa, últimos 120 pacotes e alertas |
+| GET | `/api/telemetry/history?range=1h\|6h\|24h\|7d\|30d` | código | séries agregadas (média, mín, máx) + alertas do período |
+| GET | `/api/telemetry/stream` | código | `text/event-stream`: `status` (a cada 3 s), `env`, `packet`, `alert`, `gw`, `boot` |
+| POST | `/api/telemetry/ingest` `{records:[...]}` | `X-Device-Key` | `{ kept }` (usado pela ponte; lote de até 5000 registros) |
 
 - Categorias (`category`): `farmacia`, `medico`, `gas`, `agua`, `mercado`, `delivery`, `marido`,
   `eletricista`, `encanador`, `chaveiro`, `eletro`, `outro`. Sem categoria vira `outro` (contatos
