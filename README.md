@@ -55,21 +55,27 @@ A aba **Ambiente** (`/ambiente`, com o mesmo link pessoal) mostra:
 - as **ocorrências** (alertas e normalizações).
 
 **De onde vêm os dados:** o **ESP32** é a única placa na rede. Ele registra tudo o que envia e
-recebe pelo LoRa e manda ao servidor pelo **Wi-Fi** (`POST /api/telemetry/ingest`, a cada 2 s),
-sem notebook nem USB. O **RP2040** não grava nada: ele informa o ESP32 pelo próprio LoRa, com o
+recebe pelo LoRa e publica pelo **Wi-Fi** no broker **MQTT** deste notebook (`mosquitto`,
+porta 1883), no tópico `airguard/KITCHEN_01/telemetry`, a cada 2 s, sem notebook nem USB. O
+servidor assina `airguard/+/telemetry` (`server/src/mqtt_ingest.js`) com o login `airguard`. O **RP2040** não grava nada: ele informa o ESP32 pelo próprio LoRa, com o
 RSSI/SNR dentro de cada ACK e um quadro **STAT** a cada 15 s (quais heartbeats ouviu, contadores,
 LCD). Formato dos registros: `AirGuard-IoT/docs/11_telemetry.md`. O histórico fica em
 `data/telemetry/` (um arquivo por dia, guardado por 30 dias).
 
 ```bash
-# 1) chave do ESP32 (aparece uma única vez)
-docker compose exec airguard-web node server/src/cli.js device:add "ESP32 KITCHEN_01"
-# 2) no console USB do ESP32 (uma vez; fica salvo na flash):
-#      net ssid <rede>   net pass <senha>   net server http://192.168.1.10:8787   net key <chave>
-#    ou preencha AirGuard-IoT/src/config/net_secrets.h antes de gravar o firmware
-# 3) sem placas, dados sintéticos no mesmo formato:
+# 1) login MQTT: o usuário "airguard" é criado pelo broker a partir de AIRGUARD_MQTT_USERNAME /
+#    AIRGUARD_MQTT_PASSWORD no .env do Mosquitto (mosquitto). O servidor lê o mesmo login
+#    de MQTT_USERNAME / MQTT_PASSWORD no .env deste projeto (modelo: .env.example).
+# 2) no ESP32: preencha AirGuard-IoT/src/config/net_secrets.h antes de gravar, ou no console USB
+#      net ssid <rede>   net pass <senha>   net broker 192.168.1.10:1883   net user airguard   net mqttpass <senha>
+# 3) sem placas, dados sintéticos no mesmo formato (pela rota HTTP, que continua aceitando o lote):
+docker compose exec airguard-web node server/src/cli.js device:add "Simulador"
 python3 tools/simulate_node.py --key <chave> --server http://127.0.0.1:8787
 ```
+
+Variáveis do servidor: `MQTT_URL` (no Docker, `mqtt://host.docker.internal:1883`; vazio desliga o
+MQTT), `MQTT_USERNAME`, `MQTT_PASSWORD`. O estado da conexão aparece em `/api/telemetry/state`
+(campo `mqtt`).
 
 - Se o Wi-Fi ou o servidor cair, o ESP32 guarda os registros na RAM (cerca de 2 a 3 minutos) e
   envia depois, com o horário certo. O alarme local não depende da rede.
@@ -133,7 +139,7 @@ Não rode o modo sem Docker e o container ao mesmo tempo: os dois usam a porta 8
 | GET | `/api/telemetry/state` | código | leituras atuais, placas online, enlace LoRa, últimos 120 pacotes e alertas |
 | GET | `/api/telemetry/history?range=1h\|6h\|24h\|7d\|30d` | código | séries agregadas (média, mín, máx) + alertas do período |
 | GET | `/api/telemetry/stream` | código | `text/event-stream`: `status` (a cada 3 s), `env`, `packet`, `alert`, `gw`, `boot` |
-| POST | `/api/telemetry/ingest` `{now, records:[...]}` | `X-Device-Key` | `{ kept }` (ESP32 pelo Wi-Fi; lote de até 5000 registros) |
+| POST | `/api/telemetry/ingest` `{now, records:[...]}` | `X-Device-Key` | `{ kept }` (simulador; o ESP32 usa MQTT. Lote de até 5000 registros) |
 
 - Categorias (`category`): `farmacia`, `medico`, `gas`, `agua`, `mercado`, `delivery`, `marido`,
   `eletricista`, `encanador`, `chaveiro`, `eletro`, `outro`. Sem categoria vira `outro` (contatos

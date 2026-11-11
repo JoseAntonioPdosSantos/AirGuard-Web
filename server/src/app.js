@@ -13,7 +13,7 @@
 //   GET    /api/telemetry/stream   -> text/event-stream (env, packet, alert, gw, boot, status)
 // Device API (X-Device-Key: <device key>):
 //   GET    /api/device/contacts    -> { contacts: [{ name, phone, category }] }  (every user's list)
-//   POST   /api/telemetry/ingest {now, records: [...]} -> { kept }   (ESP32 node over Wi-Fi)
+//   POST   /api/telemetry/ingest {now, records: [...]} -> { kept }   (simulator; the ESP32 uses MQTT)
 import express from 'express';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';

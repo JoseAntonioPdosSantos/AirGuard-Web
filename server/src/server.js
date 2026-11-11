@@ -2,11 +2,15 @@ import { createApp } from './app.js';
 import { config } from './config.js';
 import { Store } from './store.js';
 import { Telemetry } from './telemetry.js';
+import { startMqtt } from './mqtt_ingest.js';
 
 const store = new Store(config.dataFile);
 const log = (msg) => console.log(`${new Date().toISOString()} ${msg}`);
 const telemetry = new Telemetry(config.telemetryDir);
 setInterval(() => telemetry.prune(), 6 * 3_600_000).unref();
+if (config.mqttUrl) {
+  startMqtt(telemetry, { url: config.mqttUrl, username: config.mqttUsername, password: config.mqttPassword, log });
+}
 const app = createApp(store, { staticDir: config.staticDir, telemetry, log });
 
 app.listen(config.port, config.host, () => {

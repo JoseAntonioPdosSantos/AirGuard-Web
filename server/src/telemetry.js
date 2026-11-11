@@ -1,8 +1,10 @@
 // Telemetry of the AirGuard boards (ESP32 node + RP2040 receiver).
 //
 // The ESP32 node is the only board on the network: it records every frame it
-// sends or receives on LoRa and POSTs the records here over Wi-Fi as
-// {now: <its millis>, records: [...]}. The RP2040 receiver logs nothing: it
+// sends or receives on LoRa and publishes the records over Wi-Fi to the MQTT
+// broker (topic airguard/<device>/telemetry, see mqtt_ingest.js) as
+// {now: <its millis>, records: [...]}. POST /api/telemetry/ingest takes the
+// same body (simulator, tests). The RP2040 receiver logs nothing: it
 // reports to the node over LoRa (rssi/snr in its ACKs, periodic STAT frames)
 // and the node forwards that as "gw" records.
 // Record kinds: AirGuard-IoT/docs/11_telemetry.md.
@@ -102,6 +104,7 @@ export class Telemetry {
     this.node = { lastSeen: 0, env: null, boot: null };
     this.gw = { lastSeen: 0, stat: null, boot: null, lastRssi: null, lastSnr: null };
     this.seq = 0;
+    this.mqtt = { enabled: false, connected: false, url: null, lastMessage: null, error: null };  // set by mqtt_ingest.js
     if (persist) {
       mkdirSync(dir, { recursive: true });
       this.prune();
@@ -352,6 +355,7 @@ export class Telemetry {
         txCount: tx, ackCount: ack, failCount: fail,
         ackLatencyMs: lat.length ? Math.round(lat.reduce((a, b) => a + b, 0) / lat.length) : null,
       },
+      mqtt: { enabled: this.mqtt.enabled, connected: this.mqtt.connected, lastMessage: this.mqtt.lastMessage, error: this.mqtt.error },
       packets: this.packets.slice(-120),
       alerts: this.alerts.slice(-20),
     };

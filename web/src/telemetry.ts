@@ -43,6 +43,7 @@ export interface Status {
     rssi: number | null; snr: number | null; hbReceived: number; hbLost: number; lossPct: number | null;
     txCount: number; ackCount: number; failCount: number; ackLatencyMs: number | null;
   };
+  mqtt?: { enabled: boolean; connected: boolean; lastMessage: number | null; error: string | null };
 }
 export interface State extends Status { packets: Packet[]; alerts: Alert[] }
 
