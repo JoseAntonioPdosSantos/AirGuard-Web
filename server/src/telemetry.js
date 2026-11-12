@@ -33,7 +33,7 @@ const MINUTE = 60_000;
 // Comfort / alarm bands shown on the charts (the node's thresholds.h).
 export const DEFAULT_LIMITS = {
   gasMedium: 0.9, gasHigh: 1.5,                  // MQ-135 AO volts
-  tempLow: 18, tempHigh: 26.7,                   // comfort band (°C)
+  tempLow: 18, tempHigh: 29,                     // comfort band (°C)
   humLow: 30, humHigh: 75,                       // comfort band (%)
 };
 
