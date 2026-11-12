@@ -34,7 +34,7 @@ const MINUTE = 60_000;
 export const DEFAULT_LIMITS = {
   gasMedium: 0.9, gasHigh: 1.5,                  // MQ-135 AO volts
   tempLow: 18, tempHigh: 29,                     // comfort band (°C)
-  humLow: 30, humHigh: 75,                       // comfort band (%)
+  humLow: 30, humHigh: 80,                       // comfort band (%)
 };
 
 export const RANGES = {
