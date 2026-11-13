@@ -1,4 +1,4 @@
-// Administration on the laptop (codes are shown ONCE and never stored):
+// Administration on the server (codes are shown ONCE and never stored):
 //   npm run user:add -- "Maria"      new user + access link
 //   npm run user:list                users (no codes)
 //   npm run user:revoke -- <id>      disable a user's link

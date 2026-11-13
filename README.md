@@ -1,20 +1,78 @@
-# AirGuard Web: contatos úteis
+# AirGuard Web
 
-Aplicativo web para celular onde cada usuário guarda os **contatos úteis da cozinha/casa**
-(farmácia, médico, gás, água, mercado, delivery, marido de aluguel, eletricista, encanador,
-chaveiro, assistência de eletrodomésticos e outros), cada um com o **ícone do serviço**. O **notebook hospeda** a página e a API na rede local, e o
-**ESP32 lê pelo Wi-Fi** a lista de todos os números.
+Painel web do **AirGuard**, um sistema de monitoramento ambiental de cozinha (gás, temperatura e
+umidade) feito com ESP32 e LoRa. Roda num computador da rede local e é usado pelo celular.
 
-- `server/`: Node 20 + Express. API, controle de acesso e dados em `data/db.json`.
-- `web/`: React + Vite + TypeScript. Interface de celular com visual futurista, instalável na tela
-  inicial (PWA).
+| Página | O que faz |
+|---|---|
+| 📇 **Contatos** | contatos úteis da casa (farmácia, médico, gás, água, mercado, delivery, eletricista, encanador, chaveiro e outros), cada um com o ícone do serviço |
+| 🌡️ **Ambiente** | leituras em tempo real, histórico de até 30 dias, alertas e a qualidade do enlace LoRa |
+| 💬 **WhatsApp** | mensagens recebidas exibidas no visor do AirGuard e avisos de alerta enviados pelo WhatsApp |
 
-Endereço na rede local: **http://192.168.1.10:8787**. O IP do notebook foi fixado na rede Wi-Fi
-`MinhaRede`.
+O firmware das placas está no repositório **AirGuard-IoT**.
+
+> ⚠️ Protótipo de estudo. Não é um sistema de segurança certificado.
+
+## Sumário
+
+- [Como funciona](#como-funciona)
+- [Início rápido](#início-rápido)
+- [Acesso: um código por usuário](#acesso-um-código-por-usuário)
+- [Senha de edição](#senha-de-edição)
+- [Painel Ambiente](#painel-ambiente-telemetria-em-tempo-real)
+- [WhatsApp](#whatsapp-mensagens-recebidas-e-avisos-de-alerta)
+- [Administração](#administração)
+- [Rodar com Docker](#rodar-com-docker)
+- [API](#api)
+- [Limitações](#limitações)
+
+## Como funciona
+
+```mermaid
+flowchart LR
+    RX["📟 Receptor<br/>RP2040-Zero"] <-->|LoRa| ESP["🛰️ Sensor<br/>ESP32"]
+    ESP -->|Wi-Fi · MQTT| MQ[("Broker MQTT<br/>:1883")]
+    MQ <--> SRV["🖥️ AirGuard Web<br/>Node + Express :8787"]
+    SRV <-->|HTTP · SSE| APP["📱 App no celular<br/>React (PWA)"]
+    SRV <-->|Baileys| WA["💬 WhatsApp"]
+
+    style ESP fill:#2e7d32,color:#fff,stroke:#1b5e20
+    style RX fill:#1565c0,color:#fff,stroke:#0d47a1
+    style MQ fill:#6a1b9a,color:#fff,stroke:#4a148c
+    style SRV fill:#e65100,color:#fff,stroke:#bf360c
+    style APP fill:#00838f,color:#fff,stroke:#006064
+    style WA fill:#25d366,color:#000,stroke:#128c7e
+```
+
+- `server/`: Node 20 + Express. API, controle de acesso, assinatura MQTT e sessão do WhatsApp.
+  Dados em `data/` (arquivos JSON, fora da imagem Docker).
+- `web/`: React + Vite + TypeScript. Interface de celular, instalável na tela inicial (PWA).
+- `tools/simulate_node.py`: gera telemetria sintética para testar sem as placas.
+
+## Início rápido
+
+Pré-requisitos: Docker com Compose e um broker MQTT (por exemplo, Mosquitto) acessível na porta
+1883 da máquina que roda o servidor.
+
+```bash
+cp .env.example .env                 # preencha PUBLIC_BASE e o login MQTT
+docker compose up -d --build         # compila e inicia em http://<ip-do-servidor>:8787
+docker compose exec airguard-web node server/src/cli.js user:add "Maria"   # mostra o link pessoal
+```
+
+| Variável (`.env`) | Para que serve |
+|---|---|
+| `PUBLIC_BASE` | endereço que aparece nos links de acesso, ex.: `http://<ip-do-servidor>:8787`. Use um IP fixo na rede local |
+| `MQTT_USERNAME`, `MQTT_PASSWORD` | login do servidor no broker MQTT |
+| `MQTT_URL` | endereço do broker (no Docker o padrão é `mqtt://host.docker.internal:1883`; vazio desliga o MQTT) |
+| `WHATSAPP` | `0` desliga a integração com o WhatsApp |
+| `WHATSAPP_GROUPS` | `1` também mostra mensagens de grupos |
+
+O arquivo `.env` e a pasta `data/` não vão para o git.
 
 ## Acesso: um código por usuário
 
-- Cada usuário recebe um **link pessoal** no formato `http://192.168.1.10:8787/#k=<código>`.
+- Cada usuário recebe um **link pessoal** no formato `http://<ip-do-servidor>:8787/#k=<código>`.
 - O código tem **256 bits aleatórios** (32 bytes do gerador criptográfico do sistema, 43
   caracteres). Não dá para adivinhar nem testar por força bruta.
 - O servidor guarda **só o hash SHA-256** do código. Uma cópia de `data/db.json` não revela nenhum
@@ -55,19 +113,18 @@ A aba **Ambiente** (`/ambiente`, com o mesmo link pessoal) mostra:
 - as **ocorrências** (alertas e normalizações).
 
 **De onde vêm os dados:** o **ESP32** é a única placa na rede. Ele registra tudo o que envia e
-recebe pelo LoRa e publica pelo **Wi-Fi** no broker **MQTT** deste notebook (`mosquitto`,
-porta 1883), no tópico `airguard/KITCHEN_01/telemetry`, a cada 2 s, sem notebook nem USB. O
+recebe pelo LoRa e publica pelo **Wi-Fi** no broker **MQTT** (porta 1883), no tópico
+`airguard/KITCHEN_01/telemetry`, a cada 2 s, sem cabo USB. O
 servidor assina `airguard/+/telemetry` (`server/src/mqtt_ingest.js`) com o login `airguard`. O **RP2040** não grava nada: ele informa o ESP32 pelo próprio LoRa, com o
 RSSI/SNR dentro de cada ACK e um quadro **STAT** a cada 5 s (quais heartbeats ouviu, contadores,
 LCD). Formato dos registros: `AirGuard-IoT/docs/11_telemetry.md`. O histórico fica em
 `data/telemetry/` (um arquivo por dia, guardado por 30 dias).
 
 ```bash
-# 1) login MQTT: o usuário "airguard" é criado pelo broker a partir de AIRGUARD_MQTT_USERNAME /
-#    AIRGUARD_MQTT_PASSWORD no .env do Mosquitto (mosquitto). O servidor lê o mesmo login
-#    de MQTT_USERNAME / MQTT_PASSWORD no .env deste projeto (modelo: .env.example).
+# 1) login MQTT: crie no broker um usuário para o AirGuard (ex.: "airguard"). O servidor lê esse
+#    login de MQTT_USERNAME / MQTT_PASSWORD no .env deste projeto (modelo: .env.example).
 # 2) no ESP32: preencha AirGuard-IoT/src/config/net_secrets.h antes de gravar, ou no console USB
-#      net ssid <rede>   net pass <senha>   net broker 192.168.1.10:1883   net user airguard   net mqttpass <senha>
+#      net ssid <rede>   net pass <senha>   net broker <ip-do-broker>:1883   net user airguard   net mqttpass <senha>
 # 3) sem placas, dados sintéticos no mesmo formato (pela rota HTTP, que continua aceitando o lote):
 docker compose exec airguard-web node server/src/cli.js device:add "Simulador"
 python3 tools/simulate_node.py --key <chave> --server http://127.0.0.1:8787
@@ -115,17 +172,16 @@ Código: `server/src/whatsapp.js` (sessão), `wa_bridge.js` (MQTT ↔ WhatsApp, 
 
 ## Administração
 
-Os comandos estão na seção do Docker abaixo. Sem Docker, use `cd server && npm run user:add -- "Maria"`
+Os comandos estão na seção [Rodar com Docker](#rodar-com-docker). Sem Docker, use `cd server && npm run user:add -- "Maria"`
 (e também `user:list`, `user:revoke`, `device:add`). O link aparece **uma única vez**, e o servidor
 em execução percebe as mudanças sozinho, sem reiniciar.
 
-## Rodar com Docker (inicia sozinho com o notebook)
+## Rodar com Docker
 
 O container usa `restart: unless-stopped`, e o serviço do Docker já inicia com o sistema. Assim,
 depois de um reboot o AirGuard Web **volta sozinho**, sem precisar de login.
 
 ```bash
-cd AirGuard-Web
 docker compose up -d --build        # compila o app e inicia (repita após mudar o código)
 docker compose logs -f              # log do servidor
 docker compose stop                 # para (não volta no reboot até um "start"/"up")
@@ -147,12 +203,12 @@ docker compose exec airguard-web node server/src/cli.js device:add "ESP32"
 ### Sem Docker (desenvolvimento)
 
 ```bash
-export PATH="$HOME/.nvm/versions/node/v20.17.0/bin:$PATH"
+# requer Node 20
 (cd web && npm install && npm run build)     # gera web/dist
 (cd server && npm install && npm start)      # http://0.0.0.0:8787
 ```
 
-Testes do servidor (51, com `node:test`): `cd server && npm test`.
+Testes do servidor (56, com `node:test`): `cd server && npm test`.
 Interface com recarga automática: `cd web && npm run dev` (porta 5174, com proxy para a API em 8787).
 Não rode o modo sem Docker e o container ao mesmo tempo: os dois usam a porta 8787.
 
