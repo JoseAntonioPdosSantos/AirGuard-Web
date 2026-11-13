@@ -25,6 +25,7 @@ O firmware das placas está no repositório **AirGuard-IoT**.
 - [Rodar com Docker](#rodar-com-docker)
 - [API](#api)
 - [Limitações](#limitações)
+- [Licença](#licença)
 
 ## Como funciona
 
@@ -257,3 +258,7 @@ Não rode o modo sem Docker e o container ao mesmo tempo: os dois usam a porta 8
   mensagens ficam em texto puro em `data/whatsapp/`. A biblioteca não é oficial: o WhatsApp pode
   mudar o protocolo ou restringir contas que a usam. O aviso de alerta vai para o próprio número;
   não foi verificado se o celular toca para esse tipo de mensagem.
+
+## Licença
+
+Distribuído sob a licença [MIT](LICENSE).
