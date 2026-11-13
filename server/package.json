@@ -15,7 +15,9 @@
     "device:add": "node src/cli.js device:add"
   },
   "dependencies": {
+    "baileys": "7.0.0-rc14",
     "express": "^4.21.1",
-    "mqtt": "^5.16.1"
+    "mqtt": "^5.16.1",
+    "qrcode-generator": "^2.0.4"
   }
 }

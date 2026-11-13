@@ -1,0 +1,85 @@
+/* "WhatsApp" page (uses the panels, chips and hero of env.css) */
+.wa-head { flex: 1; }
+.wa-me { margin: 0 0 4px !important; font-size: 15px !important; color: var(--text) !important; }
+.wa-me b { font-family: 'JetBrains Mono', ui-monospace, monospace; font-weight: 400; color: var(--cyan); }
+
+.wa-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 14px; }
+.wa-actions .primary, .wa-actions .ghost { height: 44px; padding: 0 18px; border-radius: 12px; cursor: pointer; font-weight: 600; letter-spacing: 0.03em; }
+.wa-actions .ghost { color: var(--text); }
+.wa-actions button:disabled { opacity: 0.5; cursor: default; }
+.wa-ask { font-size: 14px; color: var(--ink-2); }
+
+/* pairing: the code and how to read it */
+.wa-pair { display: flex; gap: 18px; align-items: center; flex-wrap: wrap; margin-top: 14px; }
+.wa-qr { flex: none; width: min(260px, 100%); padding: 0; border-radius: 12px; overflow: hidden; background: #fff; line-height: 0; }
+.wa-qr svg { display: block; width: 100%; height: auto; fill: initial; stroke: none; }
+.wa-steps { margin: 0; padding-left: 20px; display: flex; flex-direction: column; gap: 6px; font-size: 14px; line-height: 1.4; color: var(--ink-2);
+  min-width: 220px; flex: 1; }
+.wa-steps b { color: var(--text); font-weight: 600; }
+.wa-steps .wa-count { list-style: none; margin: 4px 0 0 -20px; font-size: 12.5px; color: var(--muted); font-family: 'JetBrains Mono', ui-monospace, monospace; }
+
+/* pairing with the 8-character code: the same text the AirGuard display shows */
+.wa-code { flex: none; padding: 18px 22px; border-radius: 12px; background: rgba(0, 0, 0, 0.35); border: 1px solid var(--line); }
+.wa-code span { font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: clamp(30px, 9vw, 44px); letter-spacing: 0.12em; line-height: 1;
+  color: var(--text); white-space: nowrap; user-select: all; }
+
+/* asking for a connection: the number of the account */
+.wa-form { margin-top: 14px; display: flex; flex-direction: column; gap: 8px; max-width: 520px; }
+.wa-form label { font-size: 11px; letter-spacing: 0.16em; text-transform: uppercase; color: var(--muted); }
+.wa-form-row { display: flex; gap: 10px; flex-wrap: wrap; }
+.wa-form input { flex: 1; min-width: 190px; height: 44px; padding: 0 14px; border-radius: 12px; border: 1px solid var(--line);
+  background: rgba(0, 0, 0, 0.3); color: var(--text); font-size: 16px; outline: none; }
+.wa-form input:focus { border-color: var(--cyan); box-shadow: 0 0 0 3px rgba(34, 228, 255, 0.14); }
+.wa-form .primary { height: 44px; padding: 0 18px; border-radius: 12px; cursor: pointer; font-weight: 600; letter-spacing: 0.03em; }
+.wa-form button:disabled { opacity: 0.5; cursor: default; }
+.wa-hint { margin: 0 !important; font-size: 13px !important; line-height: 1.45; color: var(--ink-2); }
+.wa-alt { align-self: flex-start; padding: 6px 0; border: 0; background: none; color: var(--cyan); font-size: 13.5px; cursor: pointer;
+  text-decoration: underline; text-underline-offset: 3px; }
+
+/* the AirGuard node in one line */
+.wa-node { display: flex; align-items: center; gap: 10px; font-size: 13.5px; line-height: 1.45; color: var(--ink-2); padding: 12px 14px; }
+.wa-node b { color: var(--text); font-family: 'JetBrains Mono', ui-monospace, monospace; font-weight: 400; font-size: 12.5px; }
+.wa-node .ddot.on { background: var(--ok); box-shadow: 0 0 8px var(--ok); }
+
+.wa-cols { display: grid; gap: 14px; grid-template-columns: minmax(0, 1fr); align-items: start; }
+.wa-chats { margin: 0 0 10px; padding: 2px 0 4px; }
+
+/* received messages */
+.wa-list, .wa-notices { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+.wa-list { max-height: 620px; overflow-y: auto; }
+.wa-list li { display: flex; gap: 10px; padding: 10px 0; border-bottom: 1px solid rgba(182, 194, 217, 0.08); }
+.wa-list li:last-child, .wa-notices li:last-child { border-bottom: 0; }
+.wa-av { width: 38px; height: 38px; font-size: 12.5px; }
+.wa-body { flex: 1; min-width: 0; }
+.wa-top { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.wa-top b { font-size: 14.5px; font-weight: 600; overflow-wrap: anywhere; }
+.wa-top time, .wa-nrow time { margin-left: auto; font-size: 11.5px; color: var(--muted); font-family: 'JetBrains Mono', ui-monospace, monospace; white-space: nowrap; }
+.wa-num { font-size: 11.5px; color: var(--muted); font-family: 'JetBrains Mono', ui-monospace, monospace; margin-top: 1px; }
+.wa-text { margin: 5px 0 6px; font-size: 14.5px; line-height: 1.45; color: var(--text); white-space: pre-wrap; overflow-wrap: anywhere; }
+
+/* what happened to it: text + a dot, never color alone */
+.wa-fate { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--ink-2); }
+.wa-fate::before { content: ''; width: 7px; height: 7px; border-radius: 50%; background: var(--muted); flex: none; }
+.wa-fate.ok { color: var(--ok); }
+.wa-fate.ok::before { background: var(--ok); }
+.wa-fate.wait::before { background: var(--cyan); animation: blink 1.4s ease-in-out infinite; }
+.wa-fate.warn { color: #fab219; }
+.wa-fate.warn::before { background: #fab219; border-radius: 1px; transform: rotate(45deg); }
+.wa-fate.muted { color: var(--muted); }
+
+/* alert messages sent */
+.wa-notices li { border-bottom: 1px solid rgba(182, 194, 217, 0.08); }
+.wa-nrow { width: 100%; display: flex; align-items: center; gap: 8px 10px; flex-wrap: wrap; padding: 9px 0; border: 0; background: none; text-align: left;
+  cursor: pointer; color: var(--text); }
+.wa-nrow:hover { background: rgba(34, 228, 255, 0.04); }
+.wa-ndev { font-size: 11.5px; color: var(--muted); font-family: 'JetBrains Mono', ui-monospace, monospace; }
+.wa-nrow .wa-fate { flex-basis: 100%; }
+.wa-ntext { margin: 0 0 10px; padding: 10px; border-radius: 10px; background: rgba(0, 0, 0, 0.35); font-size: 12.5px; line-height: 1.5; color: var(--ink-2);
+  white-space: pre-wrap; overflow-wrap: anywhere; font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif; }
+
+.wa-foot { margin: 0 2px; }
+
+@media (min-width: 900px) {
+  .wa-cols { grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr); }
+}
+@media (prefers-reduced-motion: reduce) { .wa-fate.wait::before { animation: none !important; } }

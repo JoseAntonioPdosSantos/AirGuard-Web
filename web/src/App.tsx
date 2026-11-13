@@ -2,9 +2,15 @@ import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react
 import { api, errorText, forgetCode, takeCodeFromUrl, ApiError, type Contact, type ContactInput } from './api';
 import { CATEGORIES, CategoryIcon, categoryOf, type CategoryId } from './categories';
 import Environment from './Environment';
+import WhatsApp from './WhatsApp';
 
-type Route = 'contatos' | 'ambiente';
-const routeFromPath = (): Route => (window.location.pathname.startsWith('/ambiente') ? 'ambiente' : 'contatos');
+type Route = 'contatos' | 'ambiente' | 'whatsapp';
+const ROUTE_PATH: Record<Route, string> = { contatos: '/', ambiente: '/ambiente', whatsapp: '/whatsapp' };
+const ROUTE_TITLE: Record<Route, string> = { contatos: 'CONTATOS ÚTEIS', ambiente: 'AMBIENTE', whatsapp: 'WHATSAPP' };
+const routeFromPath = (): Route => {
+  const p = window.location.pathname;
+  return p.startsWith('/ambiente') ? 'ambiente' : p.startsWith('/whatsapp') ? 'whatsapp' : 'contatos';
+};
 
 type Phase = 'loading' | 'denied' | 'ready';
 // create = first time (no password yet), enter = unlock editing, change = new password
@@ -32,7 +38,7 @@ export default function App() {
   }, []);
   const go = (r: Route) => {
     if (r === route) return;
-    history.pushState(null, '', r === 'ambiente' ? '/ambiente' : '/');
+    history.pushState(null, '', ROUTE_PATH[r]);
     setRoute(r);
     window.scrollTo(0, 0);
   };
@@ -132,14 +138,14 @@ export default function App() {
   if (phase === 'denied') return <Denied />;
 
   return (
-    <div className={`app ${route === 'ambiente' ? 'wide' : ''}`}>
+    <div className={`app ${route === 'contatos' ? '' : 'wide'}`}>
       <div className="bg" aria-hidden />
       <header className="top">
         <div className="brand">
           <img src="/icon.svg" alt="" className="logo" />
           <div>
             <h1>AIRGUARD</h1>
-            <p className="sub">{route === 'ambiente' ? 'AMBIENTE' : 'CONTATOS ÚTEIS'}</p>
+            <p className="sub">{ROUTE_TITLE[route]}</p>
           </div>
         </div>
         <button className="user" title={hasPw ? 'Trocar a senha de edição' : 'Criar a senha de edição'}
@@ -157,9 +163,13 @@ export default function App() {
         <button className={route === 'ambiente' ? 'on' : ''} aria-current={route === 'ambiente' ? 'page' : undefined} onClick={() => go('ambiente')}>
           <svg viewBox="0 0 24 24" aria-hidden><path d="M3 12h4l3-8 4 16 3-8h4" /></svg>Ambiente
         </button>
+        <button className={route === 'whatsapp' ? 'on' : ''} aria-current={route === 'whatsapp' ? 'page' : undefined} onClick={() => go('whatsapp')}>
+          <svg viewBox="0 0 24 24" aria-hidden><path d="M4 20l1.3-3.9A8 8 0 1 1 8 19.2z" /><path d="M9 9.5c.5 2 2.5 4 4.5 4.5l1-1.2 2 1-.5 1.6c-3.5.2-7.6-3.9-7.4-7.4l1.6-.5 1 2z" /></svg>WhatsApp
+        </button>
       </nav>
 
       {route === 'ambiente' && code && <Environment code={code} />}
+      {route === 'whatsapp' && code && <WhatsApp code={code} withPw={withPw} onError={failed} notify={notify} />}
 
       {route === 'contatos' && (<>
       <section className="hud">

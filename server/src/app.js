@@ -11,6 +11,10 @@
 //   GET    /api/telemetry/state    -> current readings, boards online, last radio packets
 //   GET    /api/telemetry/history?range=1h|6h|24h|7d|30d -> bucketed series + alerts
 //   GET    /api/telemetry/stream   -> text/event-stream (env, packet, alert, gw, boot, status)
+//   GET    /api/whatsapp/state     -> session (pairing code / QR), nodes, messages received, alert messages sent
+//   GET    /api/whatsapp/stream    -> text/event-stream (init, link, node, message, notice)
+//   POST   /api/whatsapp/connect {phone?}  \ need X-Edit-Password: pair with a code typed on the phone
+//   POST   /api/whatsapp/disconnect        /  (phone given) or with a QR on the page / unlink the account
 // Device API (X-Device-Key: <device key>):
 //   GET    /api/device/contacts    -> { contacts: [{ name, phone, category }] }  (every user's list)
 //   POST   /api/telemetry/ingest {now, records: [...]} -> { kept }   (simulator; the ESP32 uses MQTT)
@@ -51,8 +55,9 @@ function findByToken(list, token) {
 }
 
 export const STATUS_PERIOD_MS = 3000;
+export const WA_STATUS_PERIOD_MS = 10_000;
 
-export function createApp(store, { staticDir, telemetry = null, limiter = new FailLimiter(), log = () => {} } = {}) {
+export function createApp(store, { staticDir, telemetry = null, whatsapp = null, limiter = new FailLimiter(), log = () => {} } = {}) {
   const app = express();
   app.disable('x-powered-by');
   app.set('trust proxy', false);
@@ -201,6 +206,53 @@ export function createApp(store, { staticDir, telemetry = null, limiter = new Fa
       const unsubscribe = telemetry.subscribe(send);
       const timer = setInterval(status, STATUS_PERIOD_MS);
       req.on('close', () => { clearInterval(timer); unsubscribe(); });
+    });
+  }
+
+  // ---- WhatsApp (wa_bridge.js) ---------------------------------------------------
+  if (whatsapp) {
+    app.get('/api/whatsapp/state', authUser, (req, res) => res.json(whatsapp.view()));
+
+    app.get('/api/whatsapp/stream', authUser, (req, res) => {
+      res.set({ 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-store', Connection: 'keep-alive', 'X-Accel-Buffering': 'no' });
+      res.flushHeaders();
+      const send = (type, data) => res.write(`event: ${type}\ndata: ${JSON.stringify(data)}\n\n`);
+      send('init', whatsapp.view());
+      const unsubscribe = whatsapp.subscribe(send);
+      // also keeps the connection alive and the page's clock in step (QR countdown)
+      const timer = setInterval(() => { send('now', { now: Date.now() }); send('node', whatsapp.nodeView()); }, WA_STATUS_PERIOD_MS);
+      req.on('close', () => { clearInterval(timer); unsubscribe(); });
+    });
+
+    // Linking and unlinking change whose WhatsApp this AirGuard reads: they
+    // ask for the edit password, like changing a contact.
+    app.post('/api/whatsapp/connect', authUser, needPassword, async (req, res) => {
+      // phone: the number of the WhatsApp account, to pair with a code instead of a QR
+      let number = null;
+      if (req.body?.phone !== undefined && req.body.phone !== null && req.body.phone !== '') {
+        const e164 = normalizePhone(req.body.phone);
+        if (!e164) return res.status(400).json({ error: 'invalid_phone' });
+        number = e164.slice(1);
+      }
+      try {
+        const result = await whatsapp.connect({ number });  // started | linked | reconnecting
+        log(`whatsapp: connection asked by ${req.user.name} (${result})`);
+        res.json({ result });
+      } catch (e) {
+        log(`whatsapp: connect failed: ${e.message}`);
+        res.status(502).json({ error: 'whatsapp_failed' });
+      }
+    });
+
+    app.post('/api/whatsapp/disconnect', authUser, needPassword, async (req, res) => {
+      try {
+        await whatsapp.disconnect();
+        log(`whatsapp: unlinked by ${req.user.name}`);
+        res.status(204).end();
+      } catch (e) {
+        log(`whatsapp: disconnect failed: ${e.message}`);
+        res.status(502).json({ error: 'whatsapp_failed' });
+      }
     });
   }
 

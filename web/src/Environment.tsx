@@ -252,7 +252,7 @@ function packetState(p: Packet, gwOnline: boolean, now: number): { text: string;
     return now - p.t > 10_000 && gwOnline ? { text: 'sem resposta', tone: 'bad' } : { text: 'enviado…', tone: 'wait' };
   }
   if (p.rx) return { text: p.tx ? 'recebido' : 'recebido pelo ESP32', tone: 'ok' };
-  // a heartbeat is confirmed by the receiver's next STAT (every 15 s)
+  // a heartbeat is confirmed by the receiver's next STAT (every 5 s)
   if (p.tx) return now - p.t > 60_000 ? { text: 'sem notícia do receptor', tone: 'muted' } : { text: 'enviado…', tone: 'wait' };
   return { text: '–', tone: 'muted' };
 }
@@ -345,7 +345,7 @@ function LoraPanel({ status, packets, pulse, now, rssi, from, to, step }: {
           );
         })}
       </div>
-      <p className="note">“Sinal de vida” é enviado a cada 5 s pelo ESP32 com as leituras; a cada 15 s o receptor responde com um status dizendo quais ouviu e com que sinal. O ESP32 registra tudo o que envia e recebe e manda ao servidor pelo Wi-Fi. Alertas precisam de confirmação (ACK) do receptor; sem ela, o ESP32 repete o envio a cada 60 s.</p>
+      <p className="note">“Sinal de vida” é enviado a cada 5 s pelo ESP32 com as leituras; a cada 5 s o receptor responde com um status dizendo quais ouviu e com que sinal. O ESP32 registra tudo o que envia e recebe e manda ao servidor pelo Wi-Fi. Alertas precisam de confirmação (ACK) do receptor; sem ela, o ESP32 repete o envio a cada 60 s.</p>
     </section>
   );
 }
