@@ -13,6 +13,10 @@ services:
       MQTT_URL: "mqtt://host.docker.internal:1883"
       MQTT_USERNAME: ${MQTT_USERNAME:-airguard}
       MQTT_PASSWORD: ${MQTT_PASSWORD:?set MQTT_PASSWORD in .env (AIRGUARD_MQTT_PASSWORD of the broker)}
+      # WhatsApp link (page "WhatsApp"): 0 turns it off. WHATSAPP_GROUPS=1 also
+      # shows group messages on the AirGuard displays.
+      WHATSAPP: ${WHATSAPP:-1}
+      WHATSAPP_GROUPS: ${WHATSAPP_GROUPS:-0}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:

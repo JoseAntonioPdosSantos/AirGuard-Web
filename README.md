@@ -58,7 +58,7 @@ A aba **Ambiente** (`/ambiente`, com o mesmo link pessoal) mostra:
 recebe pelo LoRa e publica pelo **Wi-Fi** no broker **MQTT** deste notebook (`mosquitto`,
 porta 1883), no tópico `airguard/KITCHEN_01/telemetry`, a cada 2 s, sem notebook nem USB. O
 servidor assina `airguard/+/telemetry` (`server/src/mqtt_ingest.js`) com o login `airguard`. O **RP2040** não grava nada: ele informa o ESP32 pelo próprio LoRa, com o
-RSSI/SNR dentro de cada ACK e um quadro **STAT** a cada 15 s (quais heartbeats ouviu, contadores,
+RSSI/SNR dentro de cada ACK e um quadro **STAT** a cada 5 s (quais heartbeats ouviu, contadores,
 LCD). Formato dos registros: `AirGuard-IoT/docs/11_telemetry.md`. O histórico fica em
 `data/telemetry/` (um arquivo por dia, guardado por 30 dias).
 
@@ -82,6 +82,37 @@ MQTT), `MQTT_USERNAME`, `MQTT_PASSWORD`. O estado da conexão aparece em `/api/t
 - O servidor dá a cada registro o horário de chegada menos a idade informada pelo ESP32
   (`now - ms`): a placa não precisa de relógio.
 
+## WhatsApp (mensagens recebidas e avisos de alerta)
+
+Aba **WhatsApp** (`/whatsapp`). O servidor mantém uma sessão do WhatsApp com a biblioteca
+**Baileys 7** (não oficial; protocolo do WhatsApp Web por WebSocket, sem navegador) e conversa com
+o ESP32 **só por MQTT**. Fluxo completo e tópicos: `AirGuard-IoT/docs/12_whatsapp.md`.
+
+- **Conectar com código:** digite o número da conta do WhatsApp e toque em *Conectar com código*
+  (pede a senha de edição). A página e o OLED do AirGuard mostram um código de 8 caracteres. No
+  celular: WhatsApp → Dispositivos conectados → Conectar dispositivo → **Conectar com número de
+  telefone** → digitar o código. O número fica guardado (`data/whatsapp/pairing.json`); com ele, o
+  código também é pedido sozinho quando o ESP32 é ligado e não há conta conectada.
+- **Conectar com QR code:** *Prefiro ler um QR code nesta página*. O QR aparece só na página: no
+  OLED ele fica pequeno demais para a câmera (testado).
+- **Conectado:** a página mostra o número, desde quando, e o botão *Desconectar* (remove o
+  dispositivo no WhatsApp e apaga as chaves). Depois disso dá para pedir uma nova conexão.
+- **Mensagens recebidas:** lista ao vivo, com filtro por conversa e o que aconteceu com cada uma no
+  AirGuard: *exibida no visor*, *na fila do visor*, *ignorada: alerta ativo*, *AirGuard desligado*.
+  Só conversas diretas; grupos com `WHATSAPP_GROUPS=1`. O remetente aparece pelo **nome**: o do
+  contato cadastrado aqui, senão o da agenda do celular (lida do WhatsApp depois de conectar), senão
+  o nome de perfil do WhatsApp, este acompanhado do número. Sem nome nenhum, aparece o número.
+- **Avisos enviados:** quando o estado do ESP32 muda (tópico `airguard/<nó>/state`), o servidor
+  manda uma mensagem **para o próprio número** da conta: qual alerta, gravidade, leituras, relé
+  desligou/religou a energia, normalizado. Sem conta conectada o aviso é só registrado na página.
+- **Dados:** `data/whatsapp/auth/` (chaves da sessão), `pairing.json` (número da conta), `names.json` (nomes da agenda do celular), `messages.ndjson` (últimas 500 mensagens),
+  `notices.ndjson` (últimos 100 avisos), `reported.json` (último estado já avisado, por nó).
+- `WHATSAPP=0` no `.env` desliga tudo (a aba avisa que está desativado).
+
+Código: `server/src/whatsapp.js` (sessão), `wa_bridge.js` (MQTT ↔ WhatsApp, registros),
+`wa_notify.js` (texto e momento dos avisos), `wa_text.js` (QR, limpeza do texto);
+`web/src/WhatsApp.tsx`.
+
 ## Administração
 
 Os comandos estão na seção do Docker abaixo. Sem Docker, use `cd server && npm run user:add -- "Maria"`
@@ -100,7 +131,8 @@ docker compose logs -f              # log do servidor
 docker compose stop                 # para (não volta no reboot até um "start"/"up")
 ```
 
-Os dados ficam em `./data/db.json` (volume), fora da imagem: recriar o container não apaga nada.
+Os dados ficam em `./data/` (volume: `db.json`, `telemetry/`, `whatsapp/`), fora da imagem: recriar
+o container não apaga nada, nem desconecta o WhatsApp.
 
 Administração, com o container rodando:
 
@@ -120,7 +152,7 @@ export PATH="$HOME/.nvm/versions/node/v20.17.0/bin:$PATH"
 (cd server && npm install && npm start)      # http://0.0.0.0:8787
 ```
 
-Testes do servidor (21, com `node:test`): `cd server && npm test`.
+Testes do servidor (51, com `node:test`): `cd server && npm test`.
 Interface com recarga automática: `cd web && npm run dev` (porta 5174, com proxy para a API em 8787).
 Não rode o modo sem Docker e o container ao mesmo tempo: os dois usam a porta 8787.
 
@@ -140,6 +172,10 @@ Não rode o modo sem Docker e o container ao mesmo tempo: os dois usam a porta 8
 | GET | `/api/telemetry/history?range=1h\|6h\|24h\|7d\|30d` | código | séries agregadas (média, mín, máx) + alertas do período |
 | GET | `/api/telemetry/stream` | código | `text/event-stream`: `status` (a cada 3 s), `env`, `packet`, `alert`, `gw`, `boot` |
 | POST | `/api/telemetry/ingest` `{now, records:[...]}` | `X-Device-Key` | `{ kept }` (simulador; o ESP32 usa MQTT. Lote de até 5000 registros) |
+| GET | `/api/whatsapp/state` | código | sessão do WhatsApp (e o código ou o QR, no pareamento), nós, últimas 200 mensagens recebidas, últimos 30 avisos |
+| GET | `/api/whatsapp/stream` | código | `text/event-stream`: `init` (tudo), `link`, `node`, `message`, `notice`, `now` (a cada 10 s) |
+| POST | `/api/whatsapp/connect` `{phone?}` | código + `X-Edit-Password` | com `phone`: pareamento pelo código de 8 caracteres; sem: por QR na página. `{ result }`: `started`, `linked`, `reconnecting` / 400 `invalid_phone` / 403 / 428 / 502 `whatsapp_failed` |
+| POST | `/api/whatsapp/disconnect` | código + `X-Edit-Password` | 204 (desconecta e apaga a sessão; cancela um pareamento) / 403 / 428 / 502 |
 
 - Categorias (`category`): `farmacia`, `medico`, `gas`, `agua`, `mercado`, `delivery`, `marido`,
   `eletricista`, `encanador`, `chaveiro`, `eletro`, `outro`. Sem categoria vira `outro` (contatos
@@ -160,3 +196,8 @@ Não rode o modo sem Docker e o container ao mesmo tempo: os dois usam a porta 8
   o app. Para cortar o acesso, use `user:revoke`.
 - Dados num arquivo JSON: suficiente para dezenas de usuários. Para mais do que isso, trocar por
   SQLite.
+- **WhatsApp:** a sessão é uma só para o servidor inteiro. **Qualquer usuário com link de acesso vê
+  as mensagens recebidas** por essa conta; conectar e desconectar pedem a senha de edição. As
+  mensagens ficam em texto puro em `data/whatsapp/`. A biblioteca não é oficial: o WhatsApp pode
+  mudar o protocolo ou restringir contas que a usam. O aviso de alerta vai para o próprio número;
+  não foi verificado se o celular toca para esse tipo de mensagem.

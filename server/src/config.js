@@ -15,4 +15,9 @@ export const config = {
   mqttUrl: process.env.MQTT_URL ?? 'mqtt://127.0.0.1:1883',
   mqttUsername: process.env.MQTT_USERNAME || '',
   mqttPassword: process.env.MQTT_PASSWORD || '',
+  // WhatsApp link (needs the MQTT broker: it reaches the node only through it).
+  // WHATSAPP=0 turns it off; WHATSAPP_GROUPS=1 also takes messages from groups.
+  whatsapp: process.env.WHATSAPP !== '0',
+  whatsappGroups: process.env.WHATSAPP_GROUPS === '1',
+  whatsappDir: process.env.WHATSAPP_DIR || join(root, 'data', 'whatsapp'),
 };
